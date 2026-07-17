@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { transactionsTable, categoriesTable } from "@workspace/db";
-import { eq, and, gte, lte, ilike, desc, sql } from "drizzle-orm";
+import { eq, desc, ilike } from "drizzle-orm";
 
 const router = Router();
 
@@ -14,11 +14,34 @@ async function enrichTransaction(t: typeof transactionsTable.$inferSelect) {
   return {
     ...t,
     amount: Number(t.amount),
-    category_name: cat?.name ?? null,
+    // prefer free-text category over FK lookup
+    category_name: t.category ?? cat?.name ?? null,
     category_color: cat?.color ?? null,
     category_icon: cat?.icon ?? null,
     created_at: t.created_at.toISOString(),
   };
+}
+
+/**
+ * Given a free-text category name, find or create the category and return its id.
+ * Returns null if name is blank.
+ */
+async function resolveCategoryId(name: string | null | undefined): Promise<number | null> {
+  if (!name || !name.trim()) return null;
+  const trimmed = name.trim();
+  const existing = await db.select().from(categoriesTable)
+    .where(ilike(categoriesTable.name, trimmed)).limit(1);
+  if (existing.length > 0) return existing[0].id;
+  // Create a new category on the fly
+  const [created] = await db.insert(categoriesTable).values({
+    name: trimmed,
+    type: "expense", // default; user can edit later
+    icon: "Tag",
+    color: "#6366f1",
+    is_default: false,
+    sort_order: 99,
+  }).returning();
+  return created.id;
 }
 
 router.get("/transactions", async (req, res) => {
@@ -36,6 +59,7 @@ router.get("/transactions", async (req, res) => {
       const q = search.toLowerCase();
       rows = rows.filter(r =>
         (r.description ?? "").toLowerCase().includes(q) ||
+        (r.category ?? "").toLowerCase().includes(q) ||
         (r.notes ?? "").toLowerCase().includes(q) ||
         (r.tags ?? "").toLowerCase().includes(q) ||
         String(r.amount).includes(q)
@@ -44,7 +68,6 @@ router.get("/transactions", async (req, res) => {
 
     const total = rows.length;
     const paginated = rows.slice(Number(offset), Number(offset) + Number(limit));
-
     const enriched = await Promise.all(paginated.map(enrichTransaction));
     return res.json({ transactions: enriched, total });
   } catch (err) {
@@ -56,13 +79,19 @@ router.get("/transactions", async (req, res) => {
 router.post("/transactions", async (req, res) => {
   try {
     const body = req.body;
-    const inserted = await db.insert(transactionsTable).values({
+    // Support free-text category: resolve to category_id if possible
+    const resolvedCategoryId = body.category_id
+      ? Number(body.category_id)
+      : await resolveCategoryId(body.category);
+
+    const [inserted] = await db.insert(transactionsTable).values({
       type: body.type,
       amount: String(body.amount),
       date: body.date,
       time: body.time ?? null,
       description: body.description ?? null,
-      category_id: body.category_id,
+      category: body.category ?? null,
+      category_id: resolvedCategoryId,
       subcategory: body.subcategory ?? null,
       payment_method: body.payment_method ?? null,
       location: body.location ?? null,
@@ -77,7 +106,7 @@ router.post("/transactions", async (req, res) => {
       receipt_url: body.receipt_url ?? null,
       income_source: body.income_source ?? null,
     }).returning();
-    return res.status(201).json(await enrichTransaction(inserted[0]));
+    return res.status(201).json(await enrichTransaction(inserted));
   } catch (err) {
     req.log.error({ err }, "Failed to create transaction");
     return res.status(500).json({ error: "Internal server error" });
@@ -100,13 +129,20 @@ router.put("/transactions/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     const body = req.body;
-    const updated = await db.update(transactionsTable).set({
+    const resolvedCategoryId = body.category_id != null
+      ? Number(body.category_id)
+      : body.category != null
+        ? await resolveCategoryId(body.category)
+        : undefined;
+
+    const [updated] = await db.update(transactionsTable).set({
       type: body.type,
       amount: body.amount != null ? String(body.amount) : undefined,
       date: body.date,
       time: body.time,
       description: body.description,
-      category_id: body.category_id,
+      category: body.category,
+      category_id: resolvedCategoryId,
       subcategory: body.subcategory,
       payment_method: body.payment_method,
       location: body.location,
@@ -121,8 +157,8 @@ router.put("/transactions/:id", async (req, res) => {
       receipt_url: body.receipt_url,
       income_source: body.income_source,
     }).where(eq(transactionsTable.id, id)).returning();
-    if (updated.length === 0) return res.status(404).json({ error: "Not found" });
-    return res.json(await enrichTransaction(updated[0]));
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    return res.json(await enrichTransaction(updated));
   } catch (err) {
     req.log.error({ err }, "Failed to update transaction");
     return res.status(500).json({ error: "Internal server error" });

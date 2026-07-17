@@ -1,18 +1,22 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { useLocation } from "wouter";
-import { useGetProfile, useUpdateProfile } from "@workspace/api-client-react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { motion, AnimatePresence } from "framer-motion";
+import { useToast } from "@/hooks/use-toast";
 
-export function SetupWizard() {
-  const [, setLocation] = useLocation();
-  const updateProfile = useUpdateProfile();
+interface SetupProps {
+  token: string;
+  onComplete: () => void;
+}
+
+const inputCls = "w-full h-11 px-3 rounded-lg bg-white/5 border border-white/10 text-white placeholder:text-white/25 focus:outline-none focus:ring-2 focus:ring-primary text-sm";
+const selectCls = "w-full h-11 px-3 rounded-lg bg-[#1a1a2e] border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-primary text-sm";
+const labelCls = "block text-sm font-medium text-white/70 mb-1";
+
+export function SetupWizard({ token, onComplete }: SetupProps) {
+  const { toast } = useToast();
   const [step, setStep] = useState(1);
-  
-  const [formData, setFormData] = useState({
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
     full_name: "",
     occupation: "",
     company: "",
@@ -26,118 +30,214 @@ export function SetupWizard() {
     weekly_savings_goal: "",
     emergency_fund_goal: "",
     theme: "dark",
-    week_start_day: "Monday"
+    week_start_day: "Monday",
   });
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-  };
+  const set = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm(p => ({ ...p, [e.target.name]: e.target.value }));
 
-  const handleNext = () => setStep(s => Math.min(s + 1, 4));
-  const handleBack = () => setStep(s => Math.max(s - 1, 1));
+  const totalSteps = 4;
 
-  const handleComplete = () => {
-    updateProfile.mutate({
-      data: {
-        ...formData,
-        monthly_income: Number(formData.monthly_income),
-        monthly_goal: Number(formData.monthly_goal),
-        weekly_savings_goal: Number(formData.weekly_savings_goal),
-        emergency_fund_goal: Number(formData.emergency_fund_goal)
-      }
-    }, {
-      onSuccess: () => {
-        localStorage.setItem("profile_setup_complete", "true");
-        setLocation("/");
-      }
-    });
+  const handleComplete = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          ...form,
+          monthly_income: form.monthly_income ? Number(form.monthly_income) : undefined,
+          monthly_goal: form.monthly_goal ? Number(form.monthly_goal) : undefined,
+          weekly_savings_goal: form.weekly_savings_goal ? Number(form.weekly_savings_goal) : undefined,
+          emergency_fund_goal: form.emergency_fund_goal ? Number(form.emergency_fund_goal) : undefined,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save profile");
+      localStorage.setItem("profile_setup_complete", "true");
+      onComplete();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const steps = [
     {
       title: "Personal Details",
-      description: "Let's get to know you.",
-      fields: ["full_name", "occupation", "company"]
+      desc: "Tell us a bit about yourself.",
+      content: (
+        <div className="space-y-4">
+          <div>
+            <label className={labelCls}>Full Name *</label>
+            <input name="full_name" value={form.full_name} onChange={set} required placeholder="Your full name" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Occupation</label>
+            <input name="occupation" value={form.occupation} onChange={set} placeholder="e.g. Software Engineer" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Company / Employer</label>
+            <input name="company" value={form.company} onChange={set} placeholder="Where do you work?" className={inputCls} />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Country</label>
+              <input name="country" value={form.country} onChange={set} placeholder="India" className={inputCls} />
+            </div>
+            <div>
+              <label className={labelCls}>State</label>
+              <input name="state" value={form.state} onChange={set} placeholder="Tamil Nadu" className={inputCls} />
+            </div>
+          </div>
+        </div>
+      ),
     },
     {
       title: "Financial Profile",
-      description: "How money comes in.",
-      fields: ["currency", "monthly_income", "salary_frequency", "income_type"]
+      desc: "How money comes in.",
+      content: (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Currency</label>
+              <select name="currency" value={form.currency} onChange={set} className={selectCls}>
+                {["INR","USD","EUR","GBP","AED","SGD","CAD","AUD"].map(c => (
+                  <option key={c} value={c} className="bg-[#1a1a2e] text-white">{c}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelCls}>Income Type</label>
+              <select name="income_type" value={form.income_type} onChange={set} className={selectCls}>
+                {["Salary","Freelance","Business","Investment","Mixed"].map(t => (
+                  <option key={t} value={t} className="bg-[#1a1a2e] text-white">{t}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Monthly Income (₹)</label>
+            <input type="number" name="monthly_income" value={form.monthly_income} onChange={set} placeholder="e.g. 60000" min="0" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Salary Frequency</label>
+            <select name="salary_frequency" value={form.salary_frequency} onChange={set} className={selectCls}>
+              {["monthly","bi-weekly","weekly","annually"].map(f => (
+                <option key={f} value={f} className="bg-[#1a1a2e] text-white">{f.charAt(0).toUpperCase()+f.slice(1)}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      ),
     },
     {
       title: "Your Goals",
-      description: "What are we aiming for?",
-      fields: ["monthly_goal", "weekly_savings_goal", "emergency_fund_goal"]
+      desc: "What are we aiming for?",
+      content: (
+        <div className="space-y-4">
+          <div>
+            <label className={labelCls}>Monthly Savings Goal (₹)</label>
+            <input type="number" name="monthly_goal" value={form.monthly_goal} onChange={set} placeholder="e.g. 20000" min="0" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Weekly Savings Goal (₹)</label>
+            <input type="number" name="weekly_savings_goal" value={form.weekly_savings_goal} onChange={set} placeholder="e.g. 5000" min="0" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Emergency Fund Target (₹)</label>
+            <input type="number" name="emergency_fund_goal" value={form.emergency_fund_goal} onChange={set} placeholder="e.g. 200000" min="0" className={inputCls} />
+          </div>
+        </div>
+      ),
     },
     {
       title: "Preferences",
-      description: "Make it yours.",
-      fields: ["theme", "week_start_day", "country", "state"]
-    }
+      desc: "Make it yours.",
+      content: (
+        <div className="space-y-4">
+          <div>
+            <label className={labelCls}>Theme</label>
+            <select name="theme" value={form.theme} onChange={set} className={selectCls}>
+              <option value="dark" className="bg-[#1a1a2e] text-white">Dark (recommended)</option>
+              <option value="light" className="bg-[#1a1a2e] text-white">Light</option>
+            </select>
+          </div>
+          <div>
+            <label className={labelCls}>Week Starts On</label>
+            <select name="week_start_day" value={form.week_start_day} onChange={set} className={selectCls}>
+              {["Monday","Sunday","Saturday"].map(d => (
+                <option key={d} value={d} className="bg-[#1a1a2e] text-white">{d}</option>
+              ))}
+            </select>
+          </div>
+          <div className="mt-4 p-4 rounded-xl bg-primary/10 border border-primary/20">
+            <p className="text-sm text-white/70">
+              🎉 Almost done! Click <strong className="text-white">Complete Setup</strong> to start tracking your finances.
+            </p>
+          </div>
+        </div>
+      ),
+    },
   ];
 
   return (
     <div className="min-h-[100dvh] bg-[#0d0d0f] flex items-center justify-center p-4">
       <div className="w-full max-w-md relative">
-        <div className="absolute inset-0 bg-primary/20 blur-[100px] rounded-full" />
-        <Card className="relative z-10 p-8 glass-panel border-white/10">
+        <div className="absolute inset-0 bg-primary/15 blur-[120px] rounded-full" />
+
+        <div className="relative z-10 bg-white/5 backdrop-blur-2xl border border-white/10 rounded-2xl p-8 shadow-2xl">
+          {/* Progress dots */}
           <div className="flex gap-2 mb-8">
-            {[1, 2, 3, 4].map(i => (
-              <div 
-                key={i} 
-                className={`h-1.5 flex-1 rounded-full transition-colors ${
-                  i <= step ? "bg-primary" : "bg-white/10"
-                }`}
-              />
+            {Array.from({ length: totalSteps }).map((_, i) => (
+              <div key={i} className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${i < step ? "bg-primary" : "bg-white/10"}`} />
             ))}
           </div>
 
-          <h2 className="text-2xl font-bold mb-2">{steps[step-1].title}</h2>
-          <p className="text-muted-foreground mb-6">{steps[step-1].description}</p>
+          <h2 className="text-2xl font-bold text-white mb-1">{steps[step - 1].title}</h2>
+          <p className="text-white/50 mb-6 text-sm">{steps[step - 1].desc}</p>
 
           <AnimatePresence mode="wait">
             <motion.div
               key={step}
-              initial={{ opacity: 0, x: 20 }}
+              initial={{ opacity: 0, x: 16 }}
               animate={{ opacity: 1, x: 0 }}
-              exit={{ opacity: 0, x: -20 }}
-              transition={{ duration: 0.2 }}
-              className="space-y-4"
+              exit={{ opacity: 0, x: -16 }}
+              transition={{ duration: 0.18 }}
             >
-              {steps[step-1].fields.map(field => (
-                <div key={field} className="space-y-2">
-                  <Label className="capitalize text-white/80">
-                    {field.replace(/_/g, ' ')}
-                  </Label>
-                  <Input 
-                    name={field}
-                    value={formData[field as keyof typeof formData]}
-                    onChange={handleChange}
-                    className="bg-white/5 border-white/10 focus-visible:ring-primary"
-                  />
-                </div>
-              ))}
+              {steps[step - 1].content}
             </motion.div>
           </AnimatePresence>
 
           <div className="flex justify-between mt-8">
-            <Button 
-              variant="ghost" 
-              onClick={handleBack} 
+            <button
+              onClick={() => setStep(s => Math.max(s - 1, 1))}
               disabled={step === 1}
-              className="text-white/70"
+              className="px-4 py-2 text-sm text-white/40 hover:text-white/70 disabled:opacity-0 transition-colors"
             >
-              Back
-            </Button>
-            {step < 4 ? (
-              <Button onClick={handleNext}>Next</Button>
+              ← Back
+            </button>
+            {step < totalSteps ? (
+              <button
+                onClick={() => setStep(s => s + 1)}
+                className="px-6 py-2 bg-primary hover:bg-primary/90 text-white font-medium rounded-lg text-sm transition-colors"
+              >
+                Next →
+              </button>
             ) : (
-              <Button onClick={handleComplete} disabled={updateProfile.isPending}>
-                {updateProfile.isPending ? "Saving..." : "Complete Setup"}
-              </Button>
+              <button
+                onClick={handleComplete}
+                disabled={saving}
+                className="px-6 py-2 bg-primary hover:bg-primary/90 text-white font-semibold rounded-lg text-sm transition-colors disabled:opacity-60"
+              >
+                {saving ? "Saving…" : "Complete Setup ✓"}
+              </button>
             )}
           </div>
-        </Card>
+        </div>
       </div>
     </div>
   );

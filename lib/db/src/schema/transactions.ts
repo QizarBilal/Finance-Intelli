@@ -9,7 +9,8 @@ export const transactionsTable = pgTable("transactions", {
   date: date("date").notNull(),
   time: text("time"),
   description: text("description"),
-  category_id: integer("category_id").notNull(),
+  category: text("category"),           // free-text category name (user typed)
+  category_id: integer("category_id"),  // optional FK — null when using free-text
   subcategory: text("subcategory"),
   payment_method: text("payment_method"),
   location: text("location"),
