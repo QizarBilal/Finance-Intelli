@@ -13,18 +13,18 @@ export function SetupWizard() {
   const [step, setStep] = useState(1);
   
   const [formData, setFormData] = useState({
-    full_name: "Mohammed Qizar Bilal",
-    occupation: "Software Engineer",
-    company: "My Current Company",
+    full_name: "",
+    occupation: "",
+    company: "",
     income_type: "Salary",
     currency: "INR",
-    country: "India",
-    state: "Tamil Nadu",
-    monthly_income: "100000",
+    country: "",
+    state: "",
+    monthly_income: "",
     salary_frequency: "monthly",
-    monthly_goal: "50000",
-    weekly_savings_goal: "10000",
-    emergency_fund_goal: "500000",
+    monthly_goal: "",
+    weekly_savings_goal: "",
+    emergency_fund_goal: "",
     theme: "dark",
     week_start_day: "Monday"
   });
