@@ -3,20 +3,38 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Finance Intelli API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication and profile
+  - name: transactions
+    description: Financial transactions
+  - name: categories
+    description: Transaction categories
+  - name: budgets
+    description: Budget management
+  - name: goals
+    description: Savings goals
+  - name: reminders
+    description: Bills and reminders
+  - name: dashboard
+    description: Dashboard summaries
+  - name: analytics
+    description: Analytics and charts
+  - name: insights
+    description: AI insights
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +42,884 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # AUTH
+  /auth/setup:
+    post:
+      operationId: setupProfile
+      tags: [auth]
+      summary: Create initial profile (first launch)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileSetup"
+      responses:
+        "201":
+          description: Profile created and token returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Profile already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginInput"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user profile
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/profile:
+    patch:
+      operationId: updateProfile
+      tags: [auth]
+      summary: Update profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfileUpdate"
+      responses:
+        "200":
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Profile"
+
+  /auth/password:
+    patch:
+      operationId: changePassword
+      tags: [auth]
+      summary: Change password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordChange"
+      responses:
+        "200":
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+        "400":
+          description: Invalid current password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/check:
+    get:
+      operationId: checkProfileExists
+      tags: [auth]
+      summary: Check if profile has been set up
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SetupStatus"
+
+  # TRANSACTIONS
+  /transactions:
+    get:
+      operationId: listTransactions
+      tags: [transactions]
+      summary: List transactions
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [expense, income, transfer]
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: sortBy
+          in: query
+          schema:
+            type: string
+            enum: [date, amount, category]
+            default: date
+        - name: sortOrder
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
+      responses:
+        "200":
+          description: List of transactions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionListResponse"
+    post:
+      operationId: createTransaction
+      tags: [transactions]
+      summary: Create a transaction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+
+  /transactions/{id}:
+    get:
+      operationId: getTransaction
+      tags: [transactions]
+      summary: Get transaction by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Transaction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateTransaction
+      tags: [transactions]
+      summary: Update transaction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionUpdate"
+      responses:
+        "200":
+          description: Updated transaction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteTransaction
+      tags: [transactions]
+      summary: Delete transaction
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # CATEGORIES
+  /categories:
+    get:
+      operationId: listCategories
+      tags: [categories]
+      summary: List all categories
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [expense, income, all]
+            default: all
+      responses:
+        "200":
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Category"
+    post:
+      operationId: createCategory
+      tags: [categories]
+      summary: Create or get category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CategoryInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+        "200":
+          description: Existing category returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Category"
+
+  # BUDGETS
+  /budgets:
+    get:
+      operationId: listBudgets
+      tags: [budgets]
+      summary: List budgets
+      responses:
+        "200":
+          description: List of budgets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Budget"
+    post:
+      operationId: createBudget
+      tags: [budgets]
+      summary: Create budget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+
+  /budgets/{id}:
+    get:
+      operationId: getBudget
+      tags: [budgets]
+      summary: Get budget by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateBudget
+      tags: [budgets]
+      summary: Update budget
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetUpdate"
+      responses:
+        "200":
+          description: Updated budget
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteBudget
+      tags: [budgets]
+      summary: Delete budget
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # GOALS
+  /goals:
+    get:
+      operationId: listGoals
+      tags: [goals]
+      summary: List goals
+      responses:
+        "200":
+          description: List of goals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Goal"
+    post:
+      operationId: createGoal
+      tags: [goals]
+      summary: Create goal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoalInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+
+  /goals/{id}:
+    get:
+      operationId: getGoal
+      tags: [goals]
+      summary: Get goal by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateGoal
+      tags: [goals]
+      summary: Update goal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoalUpdate"
+      responses:
+        "200":
+          description: Updated goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteGoal
+      tags: [goals]
+      summary: Delete goal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /goals/{id}/contribute:
+    post:
+      operationId: contributeToGoal
+      tags: [goals]
+      summary: Add contribution to goal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoalContribution"
+      responses:
+        "200":
+          description: Updated goal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Goal"
+
+  # REMINDERS
+  /reminders:
+    get:
+      operationId: listReminders
+      tags: [reminders]
+      summary: List reminders
+      parameters:
+        - name: upcoming
+          in: query
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: List of reminders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Reminder"
+    post:
+      operationId: createReminder
+      tags: [reminders]
+      summary: Create reminder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReminderInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reminder"
+
+  /reminders/{id}:
+    get:
+      operationId: getReminder
+      tags: [reminders]
+      summary: Get reminder by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reminder
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reminder"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      operationId: updateReminder
+      tags: [reminders]
+      summary: Update reminder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReminderUpdate"
+      responses:
+        "200":
+          description: Updated reminder
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reminder"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: deleteReminder
+      tags: [reminders]
+      summary: Delete reminder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /reminders/{id}/complete:
+    post:
+      operationId: completeReminder
+      tags: [reminders]
+      summary: Mark reminder as completed
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Reminder marked complete
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reminder"
+
+  # DASHBOARD
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard summary stats
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /dashboard/recent-transactions:
+    get:
+      operationId: getRecentTransactions
+      tags: [dashboard]
+      summary: Get recent transactions for dashboard
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 10
+      responses:
+        "200":
+          description: Recent transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+
+  /dashboard/upcoming-reminders:
+    get:
+      operationId: getUpcomingReminders
+      tags: [dashboard]
+      summary: Get upcoming reminders/bills
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 5
+      responses:
+        "200":
+          description: Upcoming reminders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Reminder"
+
+  # ANALYTICS
+  /analytics/trends:
+    get:
+      operationId: getAnalyticsTrends
+      tags: [analytics]
+      summary: Get income/expense/savings trends
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, 12m, ytd]
+            default: 30d
+        - name: groupBy
+          in: query
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: day
+      responses:
+        "200":
+          description: Trends data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrendDataPoint"
+
+  /analytics/categories:
+    get:
+      operationId: getAnalyticsCategories
+      tags: [analytics]
+      summary: Get spending by category
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, 12m, ytd]
+            default: 30d
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [expense, income]
+            default: expense
+      responses:
+        "200":
+          description: Category breakdown
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CategoryDataPoint"
+
+  /analytics/calendar:
+    get:
+      operationId: getAnalyticsCalendar
+      tags: [analytics]
+      summary: Get daily totals for calendar view
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema:
+            type: integer
+        - name: month
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Calendar data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CalendarDay"
+
+  /analytics/heatmap:
+    get:
+      operationId: getAnalyticsHeatmap
+      tags: [analytics]
+      summary: Get expense heatmap data for past year
+      responses:
+        "200":
+          description: Heatmap data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/HeatmapDay"
+
+  # AI INSIGHTS
+  /insights:
+    get:
+      operationId: getInsights
+      tags: [insights]
+      summary: Get AI-generated financial insights
+      responses:
+        "200":
+          description: Insights list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Insight"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +930,665 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+
+    SetupStatus:
+      type: object
+      properties:
+        exists:
+          type: boolean
+      required:
+        - exists
+
+    # AUTH
+    ProfileSetup:
+      type: object
+      required: [username, password, name]
+      properties:
+        username:
+          type: string
+          minLength: 3
+        password:
+          type: string
+          minLength: 6
+        name:
+          type: string
+        occupation:
+          type: string
+        jobStatus:
+          type: string
+        incomeType:
+          type: string
+        country:
+          type: string
+        state:
+          type: string
+        currency:
+          type: string
+        currencySymbol:
+          type: string
+        theme:
+          type: string
+          enum: [dark, light]
+        weekStarts:
+          type: string
+          enum: [monday, sunday]
+        salaryFrequency:
+          type: string
+
+    LoginInput:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+        rememberMe:
+          type: boolean
+
+    AuthResponse:
+      type: object
+      required: [token, profile]
+      properties:
+        token:
+          type: string
+        profile:
+          $ref: "#/components/schemas/Profile"
+
+    Profile:
+      type: object
+      required: [id, username, name]
+      properties:
+        id:
+          type: integer
+        username:
+          type: string
+        name:
+          type: string
+        occupation:
+          type: ["string", "null"]
+        jobStatus:
+          type: ["string", "null"]
+        incomeType:
+          type: ["string", "null"]
+        country:
+          type: ["string", "null"]
+        state:
+          type: ["string", "null"]
+        currency:
+          type: string
+        currencySymbol:
+          type: string
+        theme:
+          type: string
+        weekStarts:
+          type: string
+        salaryFrequency:
+          type: ["string", "null"]
+        photo:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    ProfileUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        occupation:
+          type: string
+        jobStatus:
+          type: string
+        incomeType:
+          type: string
+        country:
+          type: string
+        state:
+          type: string
+        currency:
+          type: string
+        currencySymbol:
+          type: string
+        theme:
+          type: string
+          enum: [dark, light]
+        weekStarts:
+          type: string
+          enum: [monday, sunday]
+        salaryFrequency:
+          type: string
+        photo:
+          type: string
+
+    PasswordChange:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+        newPassword:
+          type: string
+          minLength: 6
+
+    # TRANSACTIONS
+    Transaction:
+      type: object
+      required: [id, type, amount, date, createdAt]
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+          enum: [expense, income, transfer]
+        amount:
+          type: number
+        date:
+          type: string
+        time:
+          type: ["string", "null"]
+        category:
+          type: ["string", "null"]
+        description:
+          type: ["string", "null"]
+        paymentMethod:
+          type: ["string", "null"]
+        receipt:
+          type: ["string", "null"]
+        location:
+          type: ["string", "null"]
+        tags:
+          type: ["string", "null"]
+        notes:
+          type: ["string", "null"]
+        priority:
+          type: ["string", "null"]
+        recurring:
+          type: boolean
+        recurringFrequency:
+          type: ["string", "null"]
+        needOrWant:
+          type: ["string", "null"]
+        taxDeductible:
+          type: boolean
+        createdAt:
+          type: string
+
+    TransactionListResponse:
+      type: object
+      required: [data, total]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+        total:
+          type: integer
+
+    TransactionInput:
+      type: object
+      required: [type, amount, date]
+      properties:
+        type:
+          type: string
+          enum: [expense, income, transfer]
+        amount:
+          type: number
+        date:
+          type: string
+        time:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        paymentMethod:
+          type: string
+        receipt:
+          type: string
+        location:
+          type: string
+        tags:
+          type: string
+        notes:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high]
+        recurring:
+          type: boolean
+        recurringFrequency:
+          type: string
+        needOrWant:
+          type: string
+          enum: [need, want]
+        taxDeductible:
+          type: boolean
+
+    TransactionUpdate:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [expense, income, transfer]
+        amount:
+          type: number
+        date:
+          type: string
+        time:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        paymentMethod:
+          type: string
+        receipt:
+          type: string
+        location:
+          type: string
+        tags:
+          type: string
+        notes:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high]
+        recurring:
+          type: boolean
+        recurringFrequency:
+          type: string
+        needOrWant:
+          type: string
+          enum: [need, want]
+        taxDeductible:
+          type: boolean
+
+    # CATEGORIES
+    Category:
+      type: object
+      required: [id, name, type, usageCount]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        type:
+          type: string
+          enum: [expense, income, both]
+        icon:
+          type: ["string", "null"]
+        color:
+          type: ["string", "null"]
+        usageCount:
+          type: integer
+
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [expense, income, both]
+        icon:
+          type: string
+        color:
+          type: string
+
+    # BUDGETS
+    Budget:
+      type: object
+      required: [id, name, amount, spent, period, createdAt]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        amount:
+          type: number
+        spent:
+          type: number
+        period:
+          type: string
+          enum: [daily, weekly, monthly, yearly, custom]
+        category:
+          type: ["string", "null"]
+        color:
+          type: ["string", "null"]
+        startDate:
+          type: ["string", "null"]
+        endDate:
+          type: ["string", "null"]
+        alertThreshold:
+          type: ["number", "null"]
+        createdAt:
+          type: string
+
+    BudgetInput:
+      type: object
+      required: [name, amount, period]
+      properties:
+        name:
+          type: string
+        amount:
+          type: number
+        period:
+          type: string
+          enum: [daily, weekly, monthly, yearly, custom]
+        category:
+          type: string
+        color:
+          type: string
+        startDate:
+          type: string
+        endDate:
+          type: string
+        alertThreshold:
+          type: number
+
+    BudgetUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        amount:
+          type: number
+        period:
+          type: string
+          enum: [daily, weekly, monthly, yearly, custom]
+        category:
+          type: string
+        color:
+          type: string
+        startDate:
+          type: string
+        endDate:
+          type: string
+        alertThreshold:
+          type: number
+
+    # GOALS
+    Goal:
+      type: object
+      required: [id, name, targetAmount, currentAmount, createdAt]
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        targetAmount:
+          type: number
+        currentAmount:
+          type: number
+        deadline:
+          type: ["string", "null"]
+        priority:
+          type: ["string", "null"]
+        color:
+          type: ["string", "null"]
+        icon:
+          type: ["string", "null"]
+        notes:
+          type: ["string", "null"]
+        recurringContribution:
+          type: ["number", "null"]
+        recurringFrequency:
+          type: ["string", "null"]
+        isCompleted:
+          type: boolean
+        createdAt:
+          type: string
+
+    GoalInput:
+      type: object
+      required: [name, targetAmount]
+      properties:
+        name:
+          type: string
+        targetAmount:
+          type: number
+        currentAmount:
+          type: number
+        deadline:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high]
+        color:
+          type: string
+        icon:
+          type: string
+        notes:
+          type: string
+        recurringContribution:
+          type: number
+        recurringFrequency:
+          type: string
+
+    GoalUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        targetAmount:
+          type: number
+        currentAmount:
+          type: number
+        deadline:
+          type: string
+        priority:
+          type: string
+          enum: [low, medium, high]
+        color:
+          type: string
+        icon:
+          type: string
+        notes:
+          type: string
+        recurringContribution:
+          type: number
+        recurringFrequency:
+          type: string
+        isCompleted:
+          type: boolean
+
+    GoalContribution:
+      type: object
+      required: [amount]
+      properties:
+        amount:
+          type: number
+        notes:
+          type: string
+
+    # REMINDERS
+    Reminder:
+      type: object
+      required: [id, title, type, dueDate, createdAt]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        type:
+          type: string
+          enum: [bills, recharge, rent, insurance, emi, investment, salary, personal, custom]
+        amount:
+          type: ["number", "null"]
+        dueDate:
+          type: string
+        recurring:
+          type: boolean
+        recurringFrequency:
+          type: ["string", "null"]
+        notes:
+          type: ["string", "null"]
+        isCompleted:
+          type: boolean
+        createdAt:
+          type: string
+
+    ReminderInput:
+      type: object
+      required: [title, type, dueDate]
+      properties:
+        title:
+          type: string
+        type:
+          type: string
+          enum: [bills, recharge, rent, insurance, emi, investment, salary, personal, custom]
+        amount:
+          type: number
+        dueDate:
+          type: string
+        recurring:
+          type: boolean
+        recurringFrequency:
+          type: string
+        notes:
+          type: string
+
+    ReminderUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+        type:
+          type: string
+          enum: [bills, recharge, rent, insurance, emi, investment, salary, personal, custom]
+        amount:
+          type: number
+        dueDate:
+          type: string
+        recurring:
+          type: boolean
+        recurringFrequency:
+          type: string
+        notes:
+          type: string
+        isCompleted:
+          type: boolean
+
+    # DASHBOARD
+    PeriodStats:
+      type: object
+      required: [income, expense, savings]
+      properties:
+        income:
+          type: number
+        expense:
+          type: number
+        savings:
+          type: number
+
+    DashboardSummary:
+      type: object
+      required: [today, weekly, monthly, yearly, balance, savingsRate, budgetUsagePercent]
+      properties:
+        today:
+          $ref: "#/components/schemas/PeriodStats"
+        weekly:
+          $ref: "#/components/schemas/PeriodStats"
+        monthly:
+          $ref: "#/components/schemas/PeriodStats"
+        yearly:
+          $ref: "#/components/schemas/PeriodStats"
+        balance:
+          type: number
+        savingsRate:
+          type: number
+        budgetUsagePercent:
+          type: number
+        financialHealthScore:
+          type: number
+
+    # ANALYTICS
+    TrendDataPoint:
+      type: object
+      required: [date, income, expense, savings]
+      properties:
+        date:
+          type: string
+        income:
+          type: number
+        expense:
+          type: number
+        savings:
+          type: number
+
+    CategoryDataPoint:
+      type: object
+      required: [category, amount, percentage, count]
+      properties:
+        category:
+          type: string
+        amount:
+          type: number
+        percentage:
+          type: number
+        count:
+          type: integer
+
+    CalendarDay:
+      type: object
+      required: [date, income, expense, savings, transactionCount]
+      properties:
+        date:
+          type: string
+        income:
+          type: number
+        expense:
+          type: number
+        savings:
+          type: number
+        transactionCount:
+          type: integer
+
+    HeatmapDay:
+      type: object
+      required: [date, amount]
+      properties:
+        date:
+          type: string
+        amount:
+          type: number
+
+    # AI INSIGHTS
+    Insight:
+      type: object
+      required: [id, type, title, description, severity]
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [warning, info, success, tip]
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high]
+        category:
+          type: ["string", "null"]
+        amount:
+          type: ["number", "null"]
+        trend:
+          type: ["string", "null"]

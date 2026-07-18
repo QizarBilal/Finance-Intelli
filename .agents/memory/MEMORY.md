@@ -1,0 +1,2 @@
+- [Finance Intelli architecture](finance-intelli-arch.md) — full-stack personal finance OS: JWT auth, Drizzle+Postgres, Express API, React+Vite frontend with generated hooks.
+- [api-client-react export fix](api-client-react-exports.md) — must export `./custom-fetch` path in package.json for subpath imports to work in Vite.
