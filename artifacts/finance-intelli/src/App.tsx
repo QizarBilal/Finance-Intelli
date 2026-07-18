@@ -78,17 +78,32 @@ function MainApp() {
   );
 }
 
-function Router() {
+function RootRedirect() {
+  const { isAuthenticated, isSetup, isLoading } = useAuth();
   const [, setLocation] = useLocation();
-  
+
+  useEffect(() => {
+    if (isLoading) return;
+    if (isAuthenticated) {
+      setLocation('/dashboard');
+    } else if (isSetup === false) {
+      setLocation('/setup');
+    } else {
+      setLocation('/login');
+    }
+  }, [isLoading, isAuthenticated, isSetup, setLocation]);
+
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center bg-background">
+      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+function Router() {
   return (
     <Switch>
-      <Route path="/">
-        {() => {
-          // Just a redirector based on auth state handled in App shell or simple logic
-          return <AuthGuard component={() => null} />; // Effect will handle redirect
-        }}
-      </Route>
+      <Route path="/" component={RootRedirect} />
       <Route path="/setup">
         <AuthGuard component={Setup} isPublic requireSetup />
       </Route>
