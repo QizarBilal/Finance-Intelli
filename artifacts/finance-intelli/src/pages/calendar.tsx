@@ -58,54 +58,58 @@ export default function CalendarPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
         {/* Calendar */}
-        <div className="md:col-span-8 glass-card rounded-2xl p-6 flex justify-center">
+        <div className="md:col-span-8 glass-card rounded-2xl p-6">
           <CalendarComponent
             mode="single"
             selected={selectedDate}
             onSelect={handleSelect}
             onMonthChange={handleMonthChange}
-            className="w-full max-w-full p-0"
+            className="w-full p-0"
             classNames={{
               months: 'w-full',
-              month: 'w-full space-y-4',
-              caption: 'flex justify-center pt-1 relative items-center mb-6',
-              caption_label: 'text-lg font-display font-medium',
-              nav: 'space-x-1 flex items-center',
-              nav_button: 'h-8 w-8 bg-transparent p-0 opacity-50 hover:opacity-100',
+              month: 'w-full',
+              caption: 'flex justify-between pt-1 relative items-center mb-4 px-1',
+              caption_label: 'text-base font-display font-semibold',
+              nav: 'flex items-center gap-1',
+              nav_button: 'h-8 w-8 bg-muted/40 hover:bg-muted rounded-lg p-0 flex items-center justify-center transition-colors',
+              nav_button_previous: 'absolute left-1',
+              nav_button_next: 'absolute right-1',
               table: 'w-full border-collapse',
-              head_row: 'flex w-full mb-2',
-              head_cell: 'text-muted-foreground font-medium flex-1 text-[0.8rem] text-center',
-              row: 'flex w-full mt-2 gap-1',
-              cell: 'flex-1 relative p-0 text-center text-sm focus-within:relative focus-within:z-20 h-16 md:h-20',
-              day: 'w-full h-full p-1 border rounded-xl flex flex-col items-start justify-start hover:bg-muted/50 aria-selected:bg-primary/10 aria-selected:border-primary/50 aria-selected:text-primary transition-all',
-              day_today: 'border-primary text-primary font-bold',
-              day_outside: 'text-muted-foreground opacity-30',
+              head_row: 'grid grid-cols-7 w-full mb-1',
+              head_cell: 'text-muted-foreground font-medium text-xs text-center py-2',
+              row: 'grid grid-cols-7 w-full gap-1 mt-1',
+              cell: 'relative p-0 text-center focus-within:relative focus-within:z-20 min-h-[72px] md:min-h-[80px]',
+              day: 'w-full h-full min-h-[72px] md:min-h-[80px] p-1.5 border border-border/40 rounded-xl flex flex-col items-start justify-start hover:bg-muted/40 aria-selected:bg-primary/15 aria-selected:border-primary/60 transition-all cursor-pointer',
+              day_today: 'border-primary/70 bg-primary/5 font-bold',
+              day_outside: 'opacity-25 pointer-events-none',
+              day_selected: 'bg-primary/15 border-primary/60',
             }}
             components={{
               DayContent: (props: any) => {
-                // Use local date string to avoid UTC shift
                 const dayStr = toLocalDateStr(props.date);
                 const data = daysMap[dayStr];
+                const isSelected = toLocalDateStr(selectedDate) === dayStr;
                 return (
-                  <div className="w-full h-full flex flex-col">
-                    <span className="text-sm font-medium">{props.date.getDate()}</span>
+                  <div className="w-full h-full flex flex-col gap-0.5">
+                    <span className={`text-sm leading-none ${isSelected ? 'text-primary font-bold' : 'font-medium'}`}>
+                      {props.date.getDate()}
+                    </span>
                     {data && (
                       <div className="flex flex-col gap-0.5 mt-auto w-full">
                         {data.income > 0 && (
-                          <div className="text-[9px] text-emerald-400 font-mono text-right leading-tight">
-                            +{data.income >= 1000
-                              ? `${(data.income / 1000).toFixed(1)}k`
-                              : data.income.toFixed(0)}
+                          <div className="text-[10px] text-emerald-400 font-mono leading-tight truncate">
+                            +{data.income >= 1000 ? `${(data.income / 1000).toFixed(1)}k` : data.income.toFixed(0)}
                           </div>
                         )}
                         {data.expense > 0 && (
-                          <div className="text-[9px] text-rose-400 font-mono text-right leading-tight">
-                            -{data.expense >= 1000
-                              ? `${(data.expense / 1000).toFixed(1)}k`
-                              : data.expense.toFixed(0)}
+                          <div className="text-[10px] text-rose-400 font-mono leading-tight truncate">
+                            −{data.expense >= 1000 ? `${(data.expense / 1000).toFixed(1)}k` : data.expense.toFixed(0)}
                           </div>
                         )}
                       </div>
+                    )}
+                    {data && (data.income > 0 || data.expense > 0) && (
+                      <div className="w-1.5 h-1.5 rounded-full bg-primary/60 absolute top-1.5 right-1.5" />
                     )}
                   </div>
                 );

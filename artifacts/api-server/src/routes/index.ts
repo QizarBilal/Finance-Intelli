@@ -9,6 +9,7 @@ import remindersRouter from "./reminders";
 import dashboardRouter from "./dashboard";
 import analyticsRouter from "./analytics";
 import insightsRouter from "./insights";
+import resetRouter from "./reset";
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use(remindersRouter);
 router.use(dashboardRouter);
 router.use(analyticsRouter);
 router.use(insightsRouter);
+router.use(resetRouter);
 
 export default router;

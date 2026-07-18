@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useListReminders, useCreateReminder, useCompleteReminder, useDeleteReminder, Reminder } from '@workspace/api-client-react';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Plus, Bell, CheckCircle2, Clock, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -180,7 +181,10 @@ function ReminderForm({ onClose }: { onClose: () => void }) {
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Due Date</Label>
-            <Input type="date" required value={formData.dueDate} onChange={e => setFormData(p => ({...p, dueDate: e.target.value}))} />
+            <DatePicker
+              value={formData.dueDate}
+              onChange={val => setFormData(p => ({...p, dueDate: val}))}
+            />
           </div>
           <div className="space-y-2">
             <Label>Amount (Optional)</Label>

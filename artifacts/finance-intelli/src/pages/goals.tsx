@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useListGoals, useCreateGoal, useUpdateGoal, useDeleteGoal, useContributeToGoal, Goal } from '@workspace/api-client-react';
+import { DatePicker } from '@/components/ui/date-picker';
 import { Plus, Target, Trophy, TrendingUp, Edit, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { formatCurrency, formatDate } from '@/lib/utils';
@@ -220,7 +221,11 @@ function GoalForm({ goal, onClose }: { goal: Goal | null, onClose: () => void })
         </div>
         <div className="space-y-2">
           <Label>Target Date (Optional)</Label>
-          <Input type="date" value={formData.deadline} onChange={e => setFormData(p => ({...p, deadline: e.target.value}))} />
+          <DatePicker
+            value={formData.deadline}
+            onChange={val => setFormData(p => ({...p, deadline: val}))}
+            placeholder="No deadline"
+          />
         </div>
         <div className="space-y-2">
           <Label>Theme Color</Label>

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { DatePicker } from '@/components/ui/date-picker';
 import { useLocation } from 'wouter';
 import { 
   useListTransactions, 
@@ -313,12 +314,9 @@ function TransactionForm({ tx, onClose }: { tx: Transaction | null, onClose: () 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground uppercase tracking-wider">Date</Label>
-              <Input 
-                type="date" 
-                required
+              <DatePicker
                 value={formData.date}
-                onChange={e => setFormData(p => ({ ...p, date: e.target.value }))}
-                className="bg-background/50"
+                onChange={val => setFormData(p => ({ ...p, date: val }))}
               />
             </div>
 
