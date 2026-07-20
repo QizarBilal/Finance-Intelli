@@ -193,9 +193,6 @@
   }
 
   .sidebar-gradient {
-    background: linear-gradient(180deg,
-      hsl(var(--sidebar)) 0%,
-      hsl(224 22% 6% / 1) 100%
-    );
+    background-color: hsl(var(--sidebar));
   }
 }
