@@ -12,20 +12,13 @@ import {
 
 const router = Router();
 
-// Check if profile exists (first-launch check)
+// Auth check — always true (multi-user signup supported)
 router.get("/auth/check", async (_req, res): Promise<void> => {
-  const [profile] = await db.select({ id: profileTable.id }).from(profileTable).limit(1);
-  res.json({ exists: !!profile });
+  res.json({ exists: true });
 });
 
-// Setup profile (first launch)
+// Register / create account
 router.post("/auth/setup", async (req, res): Promise<void> => {
-  const existing = await db.select({ id: profileTable.id }).from(profileTable).limit(1);
-  if (existing.length > 0) {
-    res.status(409).json({ error: "Profile already exists. Please login." });
-    return;
-  }
-
   const parsed = SetupProfileBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -33,6 +26,14 @@ router.post("/auth/setup", async (req, res): Promise<void> => {
   }
 
   const { username, password, name, occupation, jobStatus, incomeType, country, state, currency, currencySymbol, theme, weekStarts, salaryFrequency } = parsed.data;
+
+  // Check username uniqueness
+  const [existing] = await db.select({ id: profileTable.id }).from(profileTable).where(eq(profileTable.username, username)).limit(1);
+  if (existing) {
+    res.status(409).json({ error: "Username already taken. Please choose another." });
+    return;
+  }
+
   const passwordHash = await bcrypt.hash(password, 12);
 
   const [profile] = await db.insert(profileTable).values({

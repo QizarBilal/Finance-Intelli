@@ -8,7 +8,7 @@ import { useEffect } from 'react';
 
 // Pages
 import Dashboard from '@/pages/dashboard';
-import Setup from '@/pages/setup';
+import Signup from '@/pages/signup';
 import Login from '@/pages/login';
 import Transactions from '@/pages/transactions';
 import Budgets from '@/pages/budgets';
@@ -19,43 +19,44 @@ import Analytics from '@/pages/analytics';
 import Reports from '@/pages/reports';
 import Settings from '@/pages/settings';
 import Insights from '@/pages/insights';
-
 import Shell from '@/components/layout/Shell';
 
 const queryClient = new QueryClient();
 
-function AuthGuard({ component: Component, isPublic = false, requireSetup = false }: { component: any, isPublic?: boolean, requireSetup?: boolean }) {
-  const { isAuthenticated, isSetup, isLoading } = useAuth();
+function AuthGuard({ component: Component, isPublic = false }: { component: any; isPublic?: boolean }) {
+  const { isAuthenticated, isLoading } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
     if (isLoading) return;
+    if (!isPublic && !isAuthenticated) setLocation('/login');
+    if (isPublic && isAuthenticated) setLocation('/dashboard');
+  }, [isLoading, isAuthenticated, isPublic, setLocation]);
 
-    if (!isPublic && !isAuthenticated) {
-      if (isSetup === false) {
-        setLocation('/setup');
-      } else {
-        setLocation('/login');
-      }
-    } else if (isPublic && isAuthenticated) {
-      setLocation('/dashboard');
-    } else if (isPublic && !isAuthenticated && !requireSetup && isSetup === false) {
-      setLocation('/setup');
-    }
-  }, [isLoading, isAuthenticated, isSetup, isPublic, requireSetup, setLocation]);
-
-  if (isLoading) {
-    return (
-      <div className="min-h-screen w-full flex items-center justify-center bg-background">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
+  if (isLoading) return <Spinner />;
   if (!isPublic && !isAuthenticated) return null;
   if (isPublic && isAuthenticated) return null;
-
   return <Component />;
+}
+
+function Spinner() {
+  return (
+    <div className="min-h-screen w-full flex items-center justify-center bg-background">
+      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
+    </div>
+  );
+}
+
+function RootRedirect() {
+  const { isAuthenticated, isLoading } = useAuth();
+  const [, setLocation] = useLocation();
+
+  useEffect(() => {
+    if (isLoading) return;
+    setLocation(isAuthenticated ? '/dashboard' : '/login');
+  }, [isLoading, isAuthenticated, setLocation]);
+
+  return <Spinner />;
 }
 
 function MainApp() {
@@ -78,37 +79,18 @@ function MainApp() {
   );
 }
 
-function RootRedirect() {
-  const { isAuthenticated, isSetup, isLoading } = useAuth();
-  const [, setLocation] = useLocation();
-
-  useEffect(() => {
-    if (isLoading) return;
-    if (isAuthenticated) {
-      setLocation('/dashboard');
-    } else if (isSetup === false) {
-      setLocation('/setup');
-    } else {
-      setLocation('/login');
-    }
-  }, [isLoading, isAuthenticated, isSetup, setLocation]);
-
-  return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-background">
-      <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-    </div>
-  );
-}
-
 function Router() {
   return (
     <Switch>
       <Route path="/" component={RootRedirect} />
-      <Route path="/setup">
-        <AuthGuard component={Setup} isPublic requireSetup />
-      </Route>
       <Route path="/login">
         <AuthGuard component={Login} isPublic />
+      </Route>
+      <Route path="/signup">
+        <AuthGuard component={Signup} isPublic />
+      </Route>
+      <Route path="/setup">
+        <AuthGuard component={Signup} isPublic />
       </Route>
       <Route path="/:rest*">
         <AuthGuard component={MainApp} />
@@ -119,7 +101,6 @@ function Router() {
 
 function App() {
   useEffect(() => {
-    // Force dark mode
     document.documentElement.classList.add('dark');
   }, []);
 
