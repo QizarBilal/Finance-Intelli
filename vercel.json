@@ -2,15 +2,15 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "installCommand": "pnpm install --frozen-lockfile",
-  "buildCommand": "pnpm --filter @workspace/finance-intelli run build",
+  "buildCommand": "pnpm --filter @workspace/api-server run build && pnpm --filter @workspace/finance-intelli run build",
   "outputDirectory": "artifacts/finance-intelli/dist/public",
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "maxDuration": 30
     }
   },
   "routes": [
-    { "src": "/api/.*", "dest": "/api/index.ts" },
+    { "src": "/api/.*", "dest": "/api/index.js" },
     { "handle": "filesystem" },
     { "src": "/.*", "dest": "/index.html" }
   ],
