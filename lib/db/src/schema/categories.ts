@@ -1,20 +1,13 @@
-import { pgTable, serial, text, numeric, boolean, integer, timestamp } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { pgTable, serial, text, integer, uniqueIndex } from "drizzle-orm/pg-core";
+import { profileTable } from "./profile";
 
 export const categoriesTable = pgTable("categories", {
   id: serial("id").primaryKey(),
+  profileId: integer("profile_id").notNull().references(() => profileTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  type: text("type").notNull().default("expense"), // expense | income | any
+  normalizedName: text("normalized_name").notNull(),
+  type: text("type").notNull().default("both"),
   icon: text("icon"),
   color: text("color"),
-  description: text("description"),
-  budget: numeric("budget", { precision: 15, scale: 2 }),
-  is_default: boolean("is_default").default(false),
-  sort_order: integer("sort_order").default(0),
-  created_at: timestamp("created_at").defaultNow().notNull(),
-});
-
-export const insertCategorySchema = createInsertSchema(categoriesTable).omit({ id: true, created_at: true });
-export type InsertCategory = z.infer<typeof insertCategorySchema>;
-export type Category = typeof categoriesTable.$inferSelect;
+  usageCount: integer("usage_count").notNull().default(0),
+}, (table) => [uniqueIndex("categories_profile_normalized_type_uq").on(table.profileId, table.normalizedName, table.type)]);

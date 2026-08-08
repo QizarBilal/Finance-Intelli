@@ -1,18 +1,20 @@
-import { pgTable, serial, text, numeric, integer, timestamp, date } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod/v4";
+import { pgTable, serial, text, numeric, timestamp, date, integer } from "drizzle-orm/pg-core";
+import { profileTable } from "./profile";
 
 export const budgetsTable = pgTable("budgets", {
   id: serial("id").primaryKey(),
-  period: text("period").notNull(), // daily | weekly | monthly | yearly
+  profileId: integer("profile_id").notNull().references(() => profileTable.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
-  category_id: integer("category_id"),
-  name: text("name"),
-  start_date: date("start_date"),
-  end_date: date("end_date"),
-  created_at: timestamp("created_at").defaultNow().notNull(),
+  period: text("period").notNull(),
+  category: text("category"),
+  color: text("color"),
+  startDate: date("start_date", { mode: "string" }),
+  endDate: date("end_date", { mode: "string" }),
+  alertThreshold: numeric("alert_threshold", { precision: 5, scale: 2 }),
+  rollover: integer("rollover").notNull().default(0),
+  version: integer("version").notNull().default(1),
+  archivedAt: timestamp("archived_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 });
-
-export const insertBudgetSchema = createInsertSchema(budgetsTable).omit({ id: true, created_at: true });
-export type InsertBudget = z.infer<typeof insertBudgetSchema>;
-export type Budget = typeof budgetsTable.$inferSelect;

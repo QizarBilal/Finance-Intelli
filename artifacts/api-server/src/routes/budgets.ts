@@ -1,162 +1,147 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
-import { budgetsTable, categoriesTable, transactionsTable } from "@workspace/db";
-import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { db, budgetsTable, transactionsTable, profileTable } from "@workspace/db";
+import { eq, and, gte, lte, sql, isNull } from "drizzle-orm";
+import { requireAuth } from "../middlewares/auth";
+import {
+  CreateBudgetBody, UpdateBudgetBody,
+  GetBudgetParams, UpdateBudgetParams, DeleteBudgetParams,
+} from "@workspace/api-zod";
+import { periodRange } from "../lib/dates";
 
 const router = Router();
 
-function periodDates(period: string) {
-  const now = new Date();
-  const today = now.toISOString().split("T")[0];
-  if (period === "daily") {
-    return { start: today, end: today };
-  } else if (period === "weekly") {
-    const day = now.getDay();
-    const diff = now.getDate() - day + (day === 0 ? -6 : 1);
-    const mon = new Date(now.setDate(diff));
-    const sun = new Date(mon);
-    sun.setDate(mon.getDate() + 6);
-    return { start: mon.toISOString().split("T")[0], end: sun.toISOString().split("T")[0] };
-  } else if (period === "monthly") {
-    const start = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-    const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    return { start, end: endDate.toISOString().split("T")[0] };
+function budgetRange(budget: typeof budgetsTable.$inferSelect, timezone = "UTC", weekStarts: "monday" | "sunday" = "monday") {
+  let dateFrom: string, dateTo: string;
+
+  if (budget.period === "custom" && budget.startDate && budget.endDate) {
+    dateFrom = budget.startDate; dateTo = budget.endDate;
+  } else if (budget.period === "daily") {
+    ({ from: dateFrom, to: dateTo } = periodRange("today", timezone, weekStarts));
+  } else if (budget.period === "weekly") {
+    ({ from: dateFrom, to: dateTo } = periodRange("weekly", timezone, weekStarts));
+  } else if (budget.period === "yearly") {
+    ({ from: dateFrom, to: dateTo } = periodRange("yearly", timezone, weekStarts));
   } else {
-    return { start: `${now.getFullYear()}-01-01`, end: `${now.getFullYear()}-12-31` };
+    ({ from: dateFrom, to: dateTo } = periodRange("monthly", timezone, weekStarts));
   }
+  return { dateFrom, dateTo };
 }
 
-// GET /budgets/utilization must come before /budgets/:id
-router.get("/budgets/utilization", async (req, res) => {
-  try {
-    const period = (req.query.period as string) || "monthly";
-    const budgets = await db.select().from(budgetsTable).where(eq(budgetsTable.period, period));
-    const { start, end } = periodDates(period);
+async function computeSpent(budget: typeof budgetsTable.$inferSelect, userId: number, timezone = "UTC", weekStarts: "monday" | "sunday" = "monday"): Promise<number> {
+  const { dateFrom, dateTo } = budgetRange(budget, timezone, weekStarts);
+  const conditions: any[] = [
+    eq(transactionsTable.profileId, userId),
+    eq(transactionsTable.type, "expense"),
+    gte(transactionsTable.date, dateFrom),
+    lte(transactionsTable.date, dateTo),
+    isNull(transactionsTable.deletedAt),
+    sql`${transactionsTable.status} <> 'void'`,
+  ];
+  if (budget.category) conditions.push(eq(transactionsTable.category, budget.category));
 
-    const result = [];
-    for (const b of budgets) {
-      let spent = 0;
-      if (b.category_id) {
-        const rows = await db.select({ total: sql<string>`COALESCE(SUM(amount::numeric), 0)` })
-          .from(transactionsTable)
-          .where(and(
-            eq(transactionsTable.type, "expense"),
-            eq(transactionsTable.category_id, b.category_id),
-            gte(transactionsTable.date, start),
-            lte(transactionsTable.date, end),
-          ));
-        spent = Number(rows[0]?.total ?? 0);
-      } else {
-        const rows = await db.select({ total: sql<string>`COALESCE(SUM(amount::numeric), 0)` })
-          .from(transactionsTable)
-          .where(and(
-            eq(transactionsTable.type, "expense"),
-            gte(transactionsTable.date, start),
-            lte(transactionsTable.date, end),
-          ));
-        spent = Number(rows[0]?.total ?? 0);
-      }
-      const budgetAmount = Number(b.amount);
-      const pct = budgetAmount > 0 ? Math.round((spent / budgetAmount) * 100) : 0;
-      let catName: string | null = null;
-      if (b.category_id) {
-        const cats = await db.select().from(categoriesTable).where(eq(categoriesTable.id, b.category_id)).limit(1);
-        catName = cats[0]?.name ?? null;
-      }
-      result.push({
-        budget_id: b.id,
-        budget_name: b.name ?? null,
-        period: b.period,
-        budget_amount: budgetAmount,
-        spent_amount: spent,
-        utilization_percent: pct,
-        category_id: b.category_id ?? null,
-        category_name: catName,
-        status: pct >= 100 ? "exceeded" : pct >= 80 ? "warning" : "safe",
-      });
-    }
-    return res.json(result);
-  } catch (err) {
-    req.log.error({ err }, "Failed to get budget utilization");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+  const [{ total }] = await db.select({ total: sql<string>`coalesce(sum(amount), 0)` })
+    .from(transactionsTable).where(and(...conditions));
+  return parseFloat(total ?? "0");
+}
+
+function serializeBudget(b: typeof budgetsTable.$inferSelect, spent: number) {
+  return {
+    id: b.id, name: b.name, amount: parseFloat(b.amount), spent,
+    period: b.period, category: b.category, color: b.color,
+    startDate: b.startDate, endDate: b.endDate,
+    alertThreshold: b.alertThreshold != null ? parseFloat(b.alertThreshold) : null,
+    createdAt: b.createdAt.toISOString(),
+  };
+}
+
+router.get("/budgets", requireAuth, async (req, res): Promise<void> => {
+  const userId = req.user!.userId;
+  const [profile, budgets] = await Promise.all([
+    db.select({ timezone: profileTable.timezone, weekStarts: profileTable.weekStarts }).from(profileTable).where(eq(profileTable.id, userId)).limit(1),
+    db.select().from(budgetsTable).where(and(eq(budgetsTable.profileId, userId), isNull(budgetsTable.archivedAt))).orderBy(budgetsTable.createdAt),
+  ]);
+  if (budgets.length === 0) { res.json([]); return; }
+  const timezone = profile[0]?.timezone ?? "UTC";
+  const weekStarts = profile[0]?.weekStarts === "sunday" ? "sunday" : "monday";
+  const ranges = budgets.map(budget => budgetRange(budget, timezone, weekStarts));
+  const minDate = ranges.reduce((min, range) => range.dateFrom < min ? range.dateFrom : min, ranges[0].dateFrom);
+  const maxDate = ranges.reduce((max, range) => range.dateTo > max ? range.dateTo : max, ranges[0].dateTo);
+  const spendRows = await db.select({
+    date: transactionsTable.date, category: transactionsTable.category,
+    amount: sql<string>`sum(${transactionsTable.amount})`,
+  }).from(transactionsTable).where(and(
+    eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"),
+    gte(transactionsTable.date, minDate), lte(transactionsTable.date, maxDate),
+    isNull(transactionsTable.deletedAt), sql`${transactionsTable.status} <> 'void'`,
+  )).groupBy(transactionsTable.date, transactionsTable.category);
+  const results = budgets.map((budget, index) => {
+    const range = ranges[index];
+    const spent = spendRows.reduce((sum, row) => row.date >= range.dateFrom && row.date <= range.dateTo &&
+      (!budget.category || budget.category === row.category) ? sum + Number(row.amount) : sum, 0);
+    return serializeBudget(budget, spent);
+  });
+  res.json(results);
 });
 
-router.get("/budgets", async (req, res) => {
-  try {
-    const period = req.query.period as string | undefined;
-    let rows = await db.select().from(budgetsTable);
-    if (period) rows = rows.filter(b => b.period === period);
+router.post("/budgets", requireAuth, async (req, res): Promise<void> => {
+  const parsed = CreateBudgetBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-    const result = [];
-    for (const b of rows) {
-      let catName: string | null = null;
-      if (b.category_id) {
-        const cats = await db.select().from(categoriesTable).where(eq(categoriesTable.id, b.category_id)).limit(1);
-        catName = cats[0]?.name ?? null;
-      }
-      result.push({
-        ...b,
-        amount: Number(b.amount),
-        category_name: catName,
-        created_at: b.created_at.toISOString(),
-      });
-    }
-    return res.json(result);
-  } catch (err) {
-    req.log.error({ err }, "Failed to list budgets");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+  const userId = req.user!.userId;
+  const data = parsed.data;
+  const [budget] = await db.insert(budgetsTable).values({
+    profileId: userId,
+    name: data.name, amount: String(data.amount), period: data.period,
+    category: data.category ?? null, color: data.color ?? null,
+    startDate: data.startDate ?? null, endDate: data.endDate ?? null,
+    alertThreshold: data.alertThreshold != null ? String(data.alertThreshold) : null,
+  }).returning();
+  res.status(201).json(serializeBudget(budget, await computeSpent(budget, userId)));
 });
 
-router.post("/budgets", async (req, res) => {
-  try {
-    const body = req.body;
-    const inserted = await db.insert(budgetsTable).values({
-      period: body.period,
-      amount: String(body.amount),
-      category_id: body.category_id ?? null,
-      name: body.name ?? null,
-      start_date: body.start_date ?? null,
-      end_date: body.end_date ?? null,
-    }).returning();
-    const b = inserted[0];
-    return res.status(201).json({ ...b, amount: Number(b.amount), category_name: null, created_at: b.created_at.toISOString() });
-  } catch (err) {
-    req.log.error({ err }, "Failed to create budget");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+router.get("/budgets/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = GetBudgetParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+
+  const userId = req.user!.userId;
+  const [budget] = await db.select().from(budgetsTable)
+    .where(and(eq(budgetsTable.id, params.data.id), eq(budgetsTable.profileId, userId)));
+  if (!budget) { res.status(404).json({ error: "Budget not found" }); return; }
+  res.json(serializeBudget(budget, await computeSpent(budget, userId)));
 });
 
-router.put("/budgets/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const body = req.body;
-    const updated = await db.update(budgetsTable).set({
-      period: body.period,
-      amount: body.amount != null ? String(body.amount) : undefined,
-      category_id: body.category_id,
-      name: body.name,
-      start_date: body.start_date,
-      end_date: body.end_date,
-    }).where(eq(budgetsTable.id, id)).returning();
-    if (updated.length === 0) return res.status(404).json({ error: "Not found" });
-    const b = updated[0];
-    return res.json({ ...b, amount: Number(b.amount), category_name: null, created_at: b.created_at.toISOString() });
-  } catch (err) {
-    req.log.error({ err }, "Failed to update budget");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+router.patch("/budgets/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = UpdateBudgetParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+  const parsed = UpdateBudgetBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const userId = req.user!.userId;
+  const data = parsed.data;
+  const updates: Record<string, unknown> = {};
+  if (data.name != null) updates.name = data.name;
+  if (data.amount != null) updates.amount = String(data.amount);
+  if (data.period != null) updates.period = data.period;
+  if (data.category != null) updates.category = data.category;
+  if (data.color != null) updates.color = data.color;
+  if (data.startDate != null) updates.startDate = data.startDate;
+  if (data.endDate != null) updates.endDate = data.endDate;
+  if (data.alertThreshold != null) updates.alertThreshold = String(data.alertThreshold);
+
+  const [budget] = await db.update(budgetsTable).set(updates)
+    .where(and(eq(budgetsTable.id, params.data.id), eq(budgetsTable.profileId, userId))).returning();
+  if (!budget) { res.status(404).json({ error: "Budget not found" }); return; }
+  res.json(serializeBudget(budget, await computeSpent(budget, userId)));
 });
 
-router.delete("/budgets/:id", async (req, res) => {
-  try {
-    await db.delete(budgetsTable).where(eq(budgetsTable.id, Number(req.params.id)));
-    return res.status(204).send();
-  } catch (err) {
-    req.log.error({ err }, "Failed to delete budget");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+router.delete("/budgets/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = DeleteBudgetParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+
+  const [deleted] = await db.delete(budgetsTable)
+    .where(and(eq(budgetsTable.id, params.data.id), eq(budgetsTable.profileId, req.user!.userId))).returning();
+  if (!deleted) { res.status(404).json({ error: "Budget not found" }); return; }
+  res.sendStatus(204);
 });
 
 export default router;

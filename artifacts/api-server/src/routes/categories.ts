@@ -1,79 +1,57 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
-import { categoriesTable } from "@workspace/db";
-import { eq, asc } from "drizzle-orm";
+import { db, categoriesTable, transactionsTable } from "@workspace/db";
+import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
+import { requireAuth } from "../middlewares/auth";
+import { CreateCategoryBody, ListCategoriesQueryParams } from "@workspace/api-zod";
 
 const router = Router();
 
-router.get("/categories", async (req, res) => {
-  try {
-    const type = req.query.type as string | undefined;
-    let query = db.select().from(categoriesTable).orderBy(asc(categoriesTable.sort_order), asc(categoriesTable.name));
-    const rows = await query;
-    const filtered = type && type !== "any" ? rows.filter(r => r.type === type || r.type === "any") : rows;
-    return res.json(filtered.map(c => ({
-      ...c,
-      budget: c.budget ? Number(c.budget) : null,
-      created_at: c.created_at.toISOString(),
-    })));
-  } catch (err) {
-    req.log.error({ err }, "Failed to list categories");
-    return res.status(500).json({ error: "Internal server error" });
+router.get("/categories", requireAuth, async (req, res): Promise<void> => {
+  const parsed = ListCategoriesQueryParams.safeParse(req.query);
+  const type = parsed.success ? parsed.data.type : "all";
+  const userId = req.user!.userId;
+
+  let categories;
+  if (type === "expense") {
+    categories = await db.select().from(categoriesTable)
+      .where(and(eq(categoriesTable.profileId, userId), or(eq(categoriesTable.type, "expense"), eq(categoriesTable.type, "both"))))
+      .orderBy(desc(categoriesTable.usageCount));
+  } else if (type === "income") {
+    categories = await db.select().from(categoriesTable)
+      .where(and(eq(categoriesTable.profileId, userId), or(eq(categoriesTable.type, "income"), eq(categoriesTable.type, "both"))))
+      .orderBy(desc(categoriesTable.usageCount));
+  } else {
+    categories = await db.select().from(categoriesTable)
+      .where(eq(categoriesTable.profileId, userId))
+      .orderBy(desc(categoriesTable.usageCount));
   }
+  const usage = await db.select({
+    categoryId: transactionsTable.categoryId,
+    count: sql<number>`count(*)::int`,
+  }).from(transactionsTable).where(and(
+    eq(transactionsTable.profileId, userId), isNull(transactionsTable.deletedAt),
+  )).groupBy(transactionsTable.categoryId);
+  const usageMap = new Map(usage.map(row => [row.categoryId, row.count]));
+  res.json(categories.map(category => ({ ...category, usageCount: usageMap.get(category.id) ?? 0 })));
 });
 
-router.post("/categories", async (req, res) => {
-  try {
-    const body = req.body;
-    const inserted = await db.insert(categoriesTable).values({
-      name: body.name,
-      type: body.type ?? "expense",
-      icon: body.icon ?? null,
-      color: body.color ?? null,
-      description: body.description ?? null,
-      budget: body.budget != null ? String(body.budget) : null,
-      is_default: false,
-      sort_order: body.sort_order ?? 0,
-    }).returning();
-    const c = inserted[0];
-    return res.status(201).json({ ...c, budget: c.budget ? Number(c.budget) : null, created_at: c.created_at.toISOString() });
-  } catch (err) {
-    req.log.error({ err }, "Failed to create category");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
+router.post("/categories", requireAuth, async (req, res): Promise<void> => {
+  const parsed = CreateCategoryBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
 
-router.put("/categories/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const body = req.body;
-    const updated = await db.update(categoriesTable).set({
-      name: body.name,
-      type: body.type,
-      icon: body.icon,
-      color: body.color,
-      description: body.description,
-      budget: body.budget != null ? String(body.budget) : null,
-      sort_order: body.sort_order,
-    }).where(eq(categoriesTable.id, id)).returning();
-    if (updated.length === 0) return res.status(404).json({ error: "Not found" });
-    const c = updated[0];
-    return res.json({ ...c, budget: c.budget ? Number(c.budget) : null, created_at: c.created_at.toISOString() });
-  } catch (err) {
-    req.log.error({ err }, "Failed to update category");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
+  const { name, type, icon, color } = parsed.data;
+  const normalizedName = name.trim().toLocaleLowerCase();
+  const userId = req.user!.userId;
 
-router.delete("/categories/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    await db.delete(categoriesTable).where(eq(categoriesTable.id, id));
-    return res.status(204).send();
-  } catch (err) {
-    req.log.error({ err }, "Failed to delete category");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+  // Upsert per user
+  const [existing] = await db.select().from(categoriesTable)
+    .where(and(eq(categoriesTable.normalizedName, normalizedName), eq(categoriesTable.profileId, userId))).limit(1);
+  if (existing) { res.status(200).json(existing); return; }
+
+  const [category] = await db.insert(categoriesTable).values({
+    profileId: userId, name: name.trim(), normalizedName, type: type ?? "both", icon: icon ?? null, color: color ?? null, usageCount: 0,
+  }).returning();
+  res.status(201).json(category);
 });
 
 export default router;

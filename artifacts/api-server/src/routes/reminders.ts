@@ -1,90 +1,127 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
-import { remindersTable } from "@workspace/db";
-import { eq, gte, lte, and } from "drizzle-orm";
+import { db, remindersTable } from "@workspace/db";
+import { eq, and, gte, asc, sql } from "drizzle-orm";
+import { requireAuth } from "../middlewares/auth";
+import {
+  CreateReminderBody, UpdateReminderBody,
+  GetReminderParams, UpdateReminderParams, DeleteReminderParams,
+  CompleteReminderParams, ListRemindersQueryParams,
+} from "@workspace/api-zod";
+import { nextOccurrence } from "../lib/dates";
+import { writeAudit } from "../lib/audit";
 
 const router = Router();
 
 function serializeReminder(r: typeof remindersTable.$inferSelect) {
   return {
-    ...r,
-    amount: r.amount ? Number(r.amount) : null,
-    created_at: r.created_at.toISOString(),
+    id: r.id, title: r.title, type: r.type,
+    amount: r.amount != null ? parseFloat(r.amount) : null,
+    dueDate: r.dueDate, recurring: r.recurring,
+    recurringFrequency: r.recurringFrequency, notes: r.notes,
+    isCompleted: r.isCompleted, createdAt: r.createdAt.toISOString(),
   };
 }
 
-router.get("/reminders", async (req, res) => {
-  try {
-    const upcomingDays = req.query.upcoming_days ? Number(req.query.upcoming_days) : undefined;
-    let rows = await db.select().from(remindersTable);
-    if (upcomingDays != null) {
-      const today = new Date();
-      const future = new Date();
-      future.setDate(future.getDate() + upcomingDays);
-      const todayStr = today.toISOString().split("T")[0];
-      const futureStr = future.toISOString().split("T")[0];
-      rows = rows.filter(r => r.due_date >= todayStr && r.due_date <= futureStr);
+router.get("/reminders", requireAuth, async (req, res): Promise<void> => {
+  const parsed = ListRemindersQueryParams.safeParse(req.query);
+  const upcoming = parsed.success ? parsed.data.upcoming : undefined;
+  const userId = req.user!.userId;
+  const today = new Date().toISOString().slice(0, 10);
+
+  let reminders;
+  if (upcoming === true) {
+    reminders = await db.select().from(remindersTable)
+      .where(and(eq(remindersTable.profileId, userId), gte(remindersTable.dueDate, today)))
+      .orderBy(asc(remindersTable.dueDate));
+  } else {
+    reminders = await db.select().from(remindersTable)
+      .where(eq(remindersTable.profileId, userId))
+      .orderBy(asc(remindersTable.dueDate));
+  }
+  res.json(reminders.map(serializeReminder));
+});
+
+router.post("/reminders", requireAuth, async (req, res): Promise<void> => {
+  const parsed = CreateReminderBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const data = parsed.data;
+  const [reminder] = await db.insert(remindersTable).values({
+    profileId: req.user!.userId,
+    title: data.title, type: data.type,
+    amount: data.amount != null ? String(data.amount) : null,
+    dueDate: data.dueDate, recurring: data.recurring ?? false,
+    recurringFrequency: data.recurringFrequency ?? null,
+    notes: data.notes ?? null, isCompleted: false,
+  }).returning();
+  res.status(201).json(serializeReminder(reminder));
+});
+
+router.get("/reminders/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = GetReminderParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+
+  const [reminder] = await db.select().from(remindersTable)
+    .where(and(eq(remindersTable.id, params.data.id), eq(remindersTable.profileId, req.user!.userId)));
+  if (!reminder) { res.status(404).json({ error: "Reminder not found" }); return; }
+  res.json(serializeReminder(reminder));
+});
+
+router.patch("/reminders/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = UpdateReminderParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+  const parsed = UpdateReminderBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const data = parsed.data;
+  const updates: Record<string, unknown> = {};
+  if (data.title != null) updates.title = data.title;
+  if (data.type != null) updates.type = data.type;
+  if (data.amount != null) updates.amount = String(data.amount);
+  if (data.dueDate != null) updates.dueDate = data.dueDate;
+  if (data.recurring != null) updates.recurring = data.recurring;
+  if (data.recurringFrequency != null) updates.recurringFrequency = data.recurringFrequency;
+  if (data.notes != null) updates.notes = data.notes;
+  if (data.isCompleted != null) updates.isCompleted = data.isCompleted;
+
+  const [reminder] = await db.update(remindersTable).set(updates)
+    .where(and(eq(remindersTable.id, params.data.id), eq(remindersTable.profileId, req.user!.userId))).returning();
+  if (!reminder) { res.status(404).json({ error: "Reminder not found" }); return; }
+  res.json(serializeReminder(reminder));
+});
+
+router.delete("/reminders/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = DeleteReminderParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+
+  const [deleted] = await db.delete(remindersTable)
+    .where(and(eq(remindersTable.id, params.data.id), eq(remindersTable.profileId, req.user!.userId))).returning();
+  if (!deleted) { res.status(404).json({ error: "Reminder not found" }); return; }
+  res.sendStatus(204);
+});
+
+router.post("/reminders/:id/complete", requireAuth, async (req, res): Promise<void> => {
+  const params = CompleteReminderParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+
+  const [current] = await db.select().from(remindersTable)
+    .where(and(eq(remindersTable.id, params.data.id), eq(remindersTable.profileId, req.user!.userId))).limit(1);
+  if (!current) { res.status(404).json({ error: "Reminder not found" }); return; }
+  const [reminder] = await db.transaction(async tx => {
+    const completed = await tx.update(remindersTable)
+      .set({ isCompleted: true, version: sql`${remindersTable.version} + 1` })
+      .where(eq(remindersTable.id, current.id)).returning();
+    if (current.recurring && current.recurringFrequency) {
+      await tx.insert(remindersTable).values({
+        profileId: current.profileId, title: current.title, type: current.type, amount: current.amount,
+        dueDate: nextOccurrence(current.dueDate, current.recurringFrequency), recurring: true,
+        recurringFrequency: current.recurringFrequency, notes: current.notes, isCompleted: false,
+      });
     }
-    rows.sort((a, b) => a.due_date.localeCompare(b.due_date));
-    return res.json(rows.map(serializeReminder));
-  } catch (err) {
-    req.log.error({ err }, "Failed to list reminders");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.post("/reminders", async (req, res) => {
-  try {
-    const body = req.body;
-    const inserted = await db.insert(remindersTable).values({
-      title: body.title,
-      description: body.description ?? null,
-      due_date: body.due_date,
-      amount: body.amount != null ? String(body.amount) : null,
-      category: body.category ?? null,
-      is_recurring: body.is_recurring ?? false,
-      recurring_frequency: body.recurring_frequency ?? null,
-      is_paid: false,
-      notify_days_before: body.notify_days_before ?? 3,
-    }).returning();
-    return res.status(201).json(serializeReminder(inserted[0]));
-  } catch (err) {
-    req.log.error({ err }, "Failed to create reminder");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.put("/reminders/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const body = req.body;
-    const updated = await db.update(remindersTable).set({
-      title: body.title,
-      description: body.description,
-      due_date: body.due_date,
-      amount: body.amount != null ? String(body.amount) : undefined,
-      category: body.category,
-      is_recurring: body.is_recurring,
-      recurring_frequency: body.recurring_frequency,
-      is_paid: body.is_paid,
-      notify_days_before: body.notify_days_before,
-    }).where(eq(remindersTable.id, id)).returning();
-    if (updated.length === 0) return res.status(404).json({ error: "Not found" });
-    return res.json(serializeReminder(updated[0]));
-  } catch (err) {
-    req.log.error({ err }, "Failed to update reminder");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.delete("/reminders/:id", async (req, res) => {
-  try {
-    await db.delete(remindersTable).where(eq(remindersTable.id, Number(req.params.id)));
-    return res.status(204).send();
-  } catch (err) {
-    req.log.error({ err }, "Failed to delete reminder");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+    return completed;
+  });
+  await writeAudit(req, "complete", "reminder", reminder.id, current, reminder);
+  res.json(serializeReminder(reminder));
 });
 
 export default router;

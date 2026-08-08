@@ -331,6 +331,12 @@ export async function customFetch<T = unknown>(
 
   const method = resolveMethod(input, init.method);
 
+  const requestUrl = resolveUrl(input);
+  const sandboxEnabled = typeof sessionStorage !== "undefined" && sessionStorage.getItem("finance-sandbox") === "true";
+  if (sandboxEnabled && !["GET", "HEAD", "OPTIONS"].includes(method) && !requestUrl.includes("/api/auth/")) {
+    throw new Error("Sandbox mode protected your data. Turn it off in the Command Centre to save changes.");
+  }
+
   if (init.body != null && (method === "GET" || method === "HEAD")) {
     throw new TypeError(`customFetch: ${method} requests cannot have a body.`);
   }
@@ -358,9 +364,17 @@ export async function customFetch<T = unknown>(
     }
   }
 
-  const requestInfo = { method, url: resolveUrl(input) };
+  const requestInfo = { method, url: requestUrl };
 
-  const response = await fetch(input, { ...init, method, headers });
+  let response = await fetch(input, { ...init, method, headers, credentials: init.credentials ?? "include" });
+
+  if (response.status === 401 && !requestInfo.url.endsWith("/auth/refresh") && !requestInfo.url.endsWith("/auth/login")) {
+    const refreshUrl = _baseUrl ? `${_baseUrl}/api/auth/refresh` : "/api/auth/refresh";
+    const refreshed = await fetch(refreshUrl, { method: "POST", credentials: "include" });
+    if (refreshed.ok) {
+      response = await fetch(input, { ...init, method, headers, credentials: init.credentials ?? "include" });
+    }
+  }
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);

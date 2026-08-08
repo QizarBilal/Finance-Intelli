@@ -1,178 +1,224 @@
 import { Router } from "express";
-import { db } from "@workspace/db";
-import { transactionsTable, categoriesTable } from "@workspace/db";
-import { eq, desc, ilike } from "drizzle-orm";
+import { db, transactionsTable, categoriesTable } from "@workspace/db";
+import { eq, and, gte, lte, ilike, sql, desc, asc, isNull, or } from "drizzle-orm";
+import { requireAuth } from "../middlewares/auth";
+import {
+  CreateTransactionBody, UpdateTransactionBody,
+  GetTransactionParams, UpdateTransactionParams, DeleteTransactionParams,
+  ListTransactionsQueryParams,
+} from "@workspace/api-zod";
+import { ensureDefaultAccount } from "../lib/accounts";
+import { writeAudit } from "../lib/audit";
 
 const router = Router();
 
-async function enrichTransaction(t: typeof transactionsTable.$inferSelect) {
-  let cat: typeof categoriesTable.$inferSelect | null = null;
-  if (t.category_id) {
-    const cats = await db.select().from(categoriesTable).where(eq(categoriesTable.id, t.category_id)).limit(1);
-    cat = cats[0] ?? null;
-  }
+function serializeTransaction(t: typeof transactionsTable.$inferSelect) {
   return {
-    ...t,
-    amount: Number(t.amount),
-    // prefer free-text category over FK lookup
-    category_name: t.category ?? cat?.name ?? null,
-    category_color: cat?.color ?? null,
-    category_icon: cat?.icon ?? null,
-    created_at: t.created_at.toISOString(),
+    id: t.id,
+    accountId: t.accountId,
+    categoryId: t.categoryId,
+    transferGroupId: t.transferGroupId,
+    type: t.type,
+    direction: t.direction,
+    amount: parseFloat(t.amount),
+    date: t.date,
+    time: t.time,
+    category: t.category,
+    description: t.description,
+    paymentMethod: t.paymentMethod,
+    receipt: t.receipt,
+    location: t.location,
+    tags: t.tags,
+    notes: t.notes,
+    priority: t.priority,
+    recurring: t.recurring,
+    recurringFrequency: t.recurringFrequency,
+    needOrWant: t.needOrWant,
+    taxDeductible: t.taxDeductible,
+    status: t.status,
+    merchant: t.merchant,
+    version: t.version,
+    createdAt: t.createdAt.toISOString(),
   };
 }
 
-/**
- * Given a free-text category name, find or create the category and return its id.
- * Returns null if name is blank.
- */
-async function resolveCategoryId(name: string | null | undefined): Promise<number | null> {
-  if (!name || !name.trim()) return null;
-  const trimmed = name.trim();
-  const existing = await db.select().from(categoriesTable)
-    .where(ilike(categoriesTable.name, trimmed)).limit(1);
-  if (existing.length > 0) return existing[0].id;
-  // Create a new category on the fly
-  const [created] = await db.insert(categoriesTable).values({
-    name: trimmed,
-    type: "expense", // default; user can edit later
-    icon: "Tag",
-    color: "#6366f1",
-    is_default: false,
-    sort_order: 99,
+router.get("/transactions", requireAuth, async (req, res): Promise<void> => {
+  const parsed = ListTransactionsQueryParams.safeParse(req.query);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const { type, category, dateFrom, dateTo, search, limit, offset, sortBy, sortOrder } = parsed.data;
+  const userId = req.user!.userId;
+
+  const conditions: any[] = [eq(transactionsTable.profileId, userId), isNull(transactionsTable.deletedAt)];
+  if (type) conditions.push(eq(transactionsTable.type, type));
+  if (category) conditions.push(eq(transactionsTable.category, category));
+  if (dateFrom) conditions.push(gte(transactionsTable.date, dateFrom));
+  if (dateTo) conditions.push(lte(transactionsTable.date, dateTo));
+  if (search) conditions.push(or(
+    ilike(transactionsTable.description, `%${search}%`),
+    ilike(transactionsTable.merchant, `%${search}%`),
+    ilike(transactionsTable.category, `%${search}%`),
+  ));
+
+  const whereClause = and(...conditions);
+  const orderCol = sortBy === "amount" ? transactionsTable.amount
+    : sortBy === "category" ? transactionsTable.category
+    : transactionsTable.date;
+  const orderFn = sortOrder === "asc" ? asc : desc;
+
+  const [transactions, [{ count }]] = await Promise.all([
+    db.select().from(transactionsTable).where(whereClause)
+      .orderBy(orderFn(orderCol), desc(transactionsTable.createdAt))
+      .limit(limit ?? 50).offset(offset ?? 0),
+    db.select({ count: sql<number>`count(*)::int` }).from(transactionsTable).where(whereClause),
+  ]);
+
+  res.json({ data: transactions.map(serializeTransaction), total: count });
+});
+
+router.post("/transactions", requireAuth, async (req, res): Promise<void> => {
+  const parsed = CreateTransactionBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const userId = req.user!.userId;
+  const data = parsed.data;
+  const requestedAccountId = Number(req.body?.accountId);
+  const accountId = Number.isInteger(requestedAccountId) && requestedAccountId > 0
+    ? requestedAccountId : await ensureDefaultAccount(userId);
+  const [ownedAccount] = await db.query.accountsTable.findMany({
+    where: (account, { and: qAnd, eq: qEq }) => qAnd(qEq(account.id, accountId), qEq(account.profileId, userId)),
+    limit: 1,
+  });
+  if (!ownedAccount) { res.status(404).json({ error: "Account not found" }); return; }
+  const normalizedCategory = data.category?.trim().toLocaleLowerCase() ?? null;
+  let categoryId: number | null = null;
+  if (normalizedCategory) {
+    const [category] = await db.insert(categoriesTable).values({
+      profileId: userId, name: data.category!.trim(), normalizedName: normalizedCategory,
+      type: data.type === "income" ? "income" : "expense", usageCount: 0,
+    }).onConflictDoUpdate({
+      target: [categoriesTable.profileId, categoriesTable.normalizedName, categoriesTable.type],
+      set: { name: data.category!.trim() },
+    }).returning({ id: categoriesTable.id });
+    categoryId = category.id;
+  }
+  const [transaction] = await db.insert(transactionsTable).values({
+    profileId: userId,
+    accountId,
+    categoryId,
+    type: data.type,
+    direction: data.type === "income" ? "credit" : "debit",
+    amount: String(data.amount),
+    date: data.date,
+    time: data.time ?? null,
+    category: data.category ?? null,
+    description: data.description ?? null,
+    paymentMethod: data.paymentMethod ?? null,
+    receipt: data.receipt ?? null,
+    location: data.location ?? null,
+    tags: data.tags ?? null,
+    notes: data.notes ?? null,
+    priority: data.priority ?? null,
+    recurring: data.recurring ?? false,
+    recurringFrequency: data.recurringFrequency ?? null,
+    needOrWant: data.needOrWant ?? null,
+    taxDeductible: data.taxDeductible ?? false,
+    status: ["pending", "cleared"].includes(req.body?.status) ? req.body.status : "cleared",
+    merchant: typeof req.body?.merchant === "string" ? req.body.merchant.trim() || null : null,
   }).returning();
-  return created.id;
-}
 
-router.get("/transactions", async (req, res) => {
-  try {
-    const { type, category_id, start_date, end_date, payment_method, search, limit = "50", offset = "0" } = req.query as Record<string, string>;
-
-    let rows = await db.select().from(transactionsTable).orderBy(desc(transactionsTable.date), desc(transactionsTable.created_at));
-
-    if (type) rows = rows.filter(r => r.type === type);
-    if (category_id) rows = rows.filter(r => r.category_id === Number(category_id));
-    if (start_date) rows = rows.filter(r => r.date >= start_date);
-    if (end_date) rows = rows.filter(r => r.date <= end_date);
-    if (payment_method) rows = rows.filter(r => r.payment_method === payment_method);
-    if (search) {
-      const q = search.toLowerCase();
-      rows = rows.filter(r =>
-        (r.description ?? "").toLowerCase().includes(q) ||
-        (r.category ?? "").toLowerCase().includes(q) ||
-        (r.notes ?? "").toLowerCase().includes(q) ||
-        (r.tags ?? "").toLowerCase().includes(q) ||
-        String(r.amount).includes(q)
-      );
+  // Auto-upsert category per user (no unique constraint, do manual check)
+  if (data.category) {
+    const [existing] = await db.select()
+      .from(categoriesTable)
+      .where(and(eq(categoriesTable.name, data.category), eq(categoriesTable.profileId, userId)))
+      .limit(1);
+    if (existing) {
+      await db.update(categoriesTable)
+        .set({ usageCount: sql`${categoriesTable.usageCount} + 1` })
+        .where(eq(categoriesTable.id, existing.id));
+    } else {
+      await db.insert(categoriesTable).values({
+        profileId: userId,
+        name: data.category,
+        normalizedName: normalizedCategory!,
+        type: data.type === "income" ? "income" : "expense",
+        usageCount: 1,
+      }).onConflictDoNothing();
     }
-
-    const total = rows.length;
-    const paginated = rows.slice(Number(offset), Number(offset) + Number(limit));
-    const enriched = await Promise.all(paginated.map(enrichTransaction));
-    return res.json({ transactions: enriched, total });
-  } catch (err) {
-    req.log.error({ err }, "Failed to list transactions");
-    return res.status(500).json({ error: "Internal server error" });
   }
+
+  await writeAudit(req, "create", "transaction", transaction.id, null, transaction);
+  res.status(201).json(serializeTransaction(transaction));
 });
 
-router.post("/transactions", async (req, res) => {
-  try {
-    const body = req.body;
-    // Support free-text category: resolve to category_id if possible
-    const resolvedCategoryId = body.category_id
-      ? Number(body.category_id)
-      : await resolveCategoryId(body.category);
+router.get("/transactions/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = GetTransactionParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
 
-    const [inserted] = await db.insert(transactionsTable).values({
-      type: body.type,
-      amount: String(body.amount),
-      date: body.date,
-      time: body.time ?? null,
-      description: body.description ?? null,
-      category: body.category ?? null,
-      category_id: resolvedCategoryId,
-      subcategory: body.subcategory ?? null,
-      payment_method: body.payment_method ?? null,
-      location: body.location ?? null,
-      tags: body.tags ?? null,
-      notes: body.notes ?? null,
-      is_recurring: body.is_recurring ?? false,
-      recurring_frequency: body.recurring_frequency ?? null,
-      mood: body.mood ?? null,
-      need_or_want: body.need_or_want ?? null,
-      is_business: body.is_business ?? false,
-      is_tax_deductible: body.is_tax_deductible ?? false,
-      receipt_url: body.receipt_url ?? null,
-      income_source: body.income_source ?? null,
-    }).returning();
-    return res.status(201).json(await enrichTransaction(inserted));
-  } catch (err) {
-    req.log.error({ err }, "Failed to create transaction");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+  const [transaction] = await db.select().from(transactionsTable)
+    .where(and(eq(transactionsTable.id, params.data.id), eq(transactionsTable.profileId, req.user!.userId), isNull(transactionsTable.deletedAt)));
+  if (!transaction) { res.status(404).json({ error: "Transaction not found" }); return; }
+  res.json(serializeTransaction(transaction));
 });
 
-router.get("/transactions/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const rows = await db.select().from(transactionsTable).where(eq(transactionsTable.id, id)).limit(1);
-    if (rows.length === 0) return res.status(404).json({ error: "Not found" });
-    return res.json(await enrichTransaction(rows[0]));
-  } catch (err) {
-    req.log.error({ err }, "Failed to get transaction");
-    return res.status(500).json({ error: "Internal server error" });
+router.patch("/transactions/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = UpdateTransactionParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
+
+  const parsed = UpdateTransactionBody.safeParse(req.body);
+  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
+
+  const data = parsed.data;
+  const [before] = await db.select().from(transactionsTable)
+    .where(and(eq(transactionsTable.id, params.data.id), eq(transactionsTable.profileId, req.user!.userId), isNull(transactionsTable.deletedAt))).limit(1);
+  if (!before) { res.status(404).json({ error: "Transaction not found" }); return; }
+  if (req.body?.version != null && Number(req.body.version) !== before.version) {
+    res.status(409).json({ error: "This transaction changed elsewhere. Refresh and retry." }); return;
   }
+  const updates: Record<string, unknown> = {};
+  if (data.type != null) {
+    updates.type = data.type;
+    updates.direction = data.type === "income" ? "credit" : "debit";
+  }
+  if (data.amount != null) updates.amount = String(data.amount);
+  if (data.date != null) updates.date = data.date;
+  if (data.time != null) updates.time = data.time;
+  if (Object.prototype.hasOwnProperty.call(req.body, "category")) updates.category = data.category ?? null;
+  if (data.description != null) updates.description = data.description;
+  if (data.paymentMethod != null) updates.paymentMethod = data.paymentMethod;
+  if (data.receipt != null) updates.receipt = data.receipt;
+  if (data.location != null) updates.location = data.location;
+  if (data.tags != null) updates.tags = data.tags;
+  if (data.notes != null) updates.notes = data.notes;
+  if (data.priority != null) updates.priority = data.priority;
+  if (data.recurring != null) updates.recurring = data.recurring;
+  if (Object.prototype.hasOwnProperty.call(req.body, "recurringFrequency")) updates.recurringFrequency = data.recurringFrequency ?? null;
+  if (Object.prototype.hasOwnProperty.call(req.body, "needOrWant")) updates.needOrWant = data.needOrWant ?? null;
+  if (data.taxDeductible != null) updates.taxDeductible = data.taxDeductible;
+  if (req.body?.status != null && ["pending", "cleared", "reconciled", "void"].includes(req.body.status)) updates.status = req.body.status;
+  if (Object.prototype.hasOwnProperty.call(req.body, "merchant")) updates.merchant = req.body.merchant || null;
+  updates.version = sql`${transactionsTable.version} + 1`;
+
+  const [transaction] = await db.update(transactionsTable).set(updates)
+    .where(and(eq(transactionsTable.id, params.data.id), eq(transactionsTable.profileId, req.user!.userId), isNull(transactionsTable.deletedAt)))
+    .returning();
+  if (!transaction) { res.status(404).json({ error: "Transaction not found" }); return; }
+  await writeAudit(req, "update", "transaction", transaction.id, before, transaction);
+  res.json(serializeTransaction(transaction));
 });
 
-router.put("/transactions/:id", async (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const body = req.body;
-    const resolvedCategoryId = body.category_id != null
-      ? Number(body.category_id)
-      : body.category != null
-        ? await resolveCategoryId(body.category)
-        : undefined;
+router.delete("/transactions/:id", requireAuth, async (req, res): Promise<void> => {
+  const params = DeleteTransactionParams.safeParse(req.params);
+  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
 
-    const [updated] = await db.update(transactionsTable).set({
-      type: body.type,
-      amount: body.amount != null ? String(body.amount) : undefined,
-      date: body.date,
-      time: body.time,
-      description: body.description,
-      category: body.category,
-      category_id: resolvedCategoryId,
-      subcategory: body.subcategory,
-      payment_method: body.payment_method,
-      location: body.location,
-      tags: body.tags,
-      notes: body.notes,
-      is_recurring: body.is_recurring,
-      recurring_frequency: body.recurring_frequency,
-      mood: body.mood,
-      need_or_want: body.need_or_want,
-      is_business: body.is_business,
-      is_tax_deductible: body.is_tax_deductible,
-      receipt_url: body.receipt_url,
-      income_source: body.income_source,
-    }).where(eq(transactionsTable.id, id)).returning();
-    if (!updated) return res.status(404).json({ error: "Not found" });
-    return res.json(await enrichTransaction(updated));
-  } catch (err) {
-    req.log.error({ err }, "Failed to update transaction");
-    return res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-router.delete("/transactions/:id", async (req, res) => {
-  try {
-    await db.delete(transactionsTable).where(eq(transactionsTable.id, Number(req.params.id)));
-    return res.status(204).send();
-  } catch (err) {
-    req.log.error({ err }, "Failed to delete transaction");
-    return res.status(500).json({ error: "Internal server error" });
-  }
+  const [deleted] = await db.update(transactionsTable)
+    .set({ deletedAt: new Date(), version: sql`${transactionsTable.version} + 1` })
+    .where(and(eq(transactionsTable.id, params.data.id), eq(transactionsTable.profileId, req.user!.userId), isNull(transactionsTable.deletedAt)))
+    .returning();
+  if (!deleted) { res.status(404).json({ error: "Transaction not found" }); return; }
+  await writeAudit(req, "soft_delete", "transaction", deleted.id, deleted, null);
+  res.sendStatus(204);
 });
 
 export default router;

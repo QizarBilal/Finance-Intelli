@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Finance Intelli"
+version = "1.0.0"
+id = "artifacts/finance-intelli"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 23503
+
+[services.development]
+run = "pnpm --filter @workspace/finance-intelli run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/finance-intelli", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/finance-intelli/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "23503"
+BASE_PATH = "/"

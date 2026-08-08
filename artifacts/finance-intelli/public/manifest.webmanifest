@@ -1,0 +1,12 @@
+{
+  "name": "Finance Intelli",
+  "short_name": "Intelli",
+  "description": "Private, explainable personal finance planning and account ledger.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0c1018",
+  "theme_color": "#18a979",
+  "icons": [
+    { "src": "./favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
