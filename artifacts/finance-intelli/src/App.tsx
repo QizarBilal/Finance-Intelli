@@ -1,36 +1,53 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from '@/components/ui/toaster';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import NotFound from '@/pages/not-found';
 import { Route, Switch, Router as WouterRouter, useLocation } from 'wouter';
 import { useAuth } from '@/hooks/use-auth';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect, type ComponentType } from 'react';
 
-// Pages
-import Dashboard from '@/pages/dashboard';
-import Signup from '@/pages/signup';
-import Login from '@/pages/login';
-import Transactions from '@/pages/transactions';
-import Budgets from '@/pages/budgets';
-import Goals from '@/pages/goals';
-import Calendar from '@/pages/calendar';
-import Reminders from '@/pages/reminders';
-import Analytics from '@/pages/analytics';
-import Reports from '@/pages/reports';
-import Settings from '@/pages/settings';
-import Insights from '@/pages/insights';
 import Shell from '@/components/layout/Shell';
 
-const queryClient = new QueryClient();
+const Dashboard = lazy(() => import('@/pages/dashboard'));
+const Signup = lazy(() => import('@/pages/signup'));
+const Login = lazy(() => import('@/pages/login'));
+const Transactions = lazy(() => import('@/pages/transactions'));
+const Budgets = lazy(() => import('@/pages/budgets'));
+const Goals = lazy(() => import('@/pages/goals'));
+const Calendar = lazy(() => import('@/pages/calendar'));
+const Reminders = lazy(() => import('@/pages/reminders'));
+const Analytics = lazy(() => import('@/pages/analytics'));
+const Reports = lazy(() => import('@/pages/reports'));
+const Settings = lazy(() => import('@/pages/settings'));
+const Insights = lazy(() => import('@/pages/insights'));
+const Accounts = lazy(() => import('@/pages/accounts'));
+const Plan = lazy(() => import('@/pages/plan'));
+const CommandCenter = lazy(() => import('@/pages/command-center'));
+const Wealth = lazy(() => import('@/pages/wealth'));
+const Organize = lazy(() => import('@/pages/organize'));
+const Studio = lazy(() => import('@/pages/studio'));
+const NotFound = lazy(() => import('@/pages/not-found'));
 
-function AuthGuard({ component: Component, isPublic = false }: { component: any; isPublic?: boolean }) {
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      gcTime: 15 * 60_000,
+      retry: (count, error: any) => error?.status >= 400 && error?.status < 500 ? false : count < 2,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: true,
+    },
+    mutations: { retry: 0 },
+  },
+});
+
+function AuthGuard({ component: Component, isPublic = false }: { component: ComponentType; isPublic?: boolean }) {
   const { isAuthenticated, isLoading } = useAuth();
   const [, setLocation] = useLocation();
 
   useEffect(() => {
     if (isLoading) return;
     if (!isPublic && !isAuthenticated) setLocation('/login');
-    if (isPublic && isAuthenticated) setLocation('/dashboard');
+    if (isPublic && isAuthenticated) setLocation('/command');
   }, [isLoading, isAuthenticated, isPublic, setLocation]);
 
   if (isLoading) return <Spinner />;
@@ -53,7 +70,7 @@ function RootRedirect() {
 
   useEffect(() => {
     if (isLoading) return;
-    setLocation(isAuthenticated ? '/dashboard' : '/login');
+    setLocation(isAuthenticated ? '/command' : '/login');
   }, [isLoading, isAuthenticated, setLocation]);
 
   return <Spinner />;
@@ -64,7 +81,13 @@ function MainApp() {
     <Shell>
       <Switch>
         <Route path="/dashboard" component={Dashboard} />
+        <Route path="/command" component={CommandCenter} />
+        <Route path="/wealth" component={Wealth} />
+        <Route path="/organize" component={Organize} />
+        <Route path="/studio" component={Studio} />
         <Route path="/transactions" component={Transactions} />
+        <Route path="/accounts" component={Accounts} />
+        <Route path="/plan" component={Plan} />
         <Route path="/budgets" component={Budgets} />
         <Route path="/goals" component={Goals} />
         <Route path="/calendar" component={Calendar} />
@@ -100,16 +123,14 @@ function Router() {
 }
 
 function App() {
-  useEffect(() => {
-    document.documentElement.classList.add('dark');
-  }, []);
-
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <Router />
-        </WouterRouter>
+        <Suspense fallback={<Spinner />}>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <Router />
+          </WouterRouter>
+        </Suspense>
         <Toaster />
       </TooltipProvider>
     </QueryClientProvider>

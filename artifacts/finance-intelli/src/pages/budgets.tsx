@@ -215,7 +215,7 @@ function BudgetForm({ budget, onClose }: { budget: Budget | null, onClose: () =>
         
         <div className="space-y-2">
           <Label>Period</Label>
-          <Select value={formData.period} onValueChange={v => setFormData(p => ({...p, period: v}))}>
+          <Select value={formData.period} onValueChange={v => setFormData(p => ({...p, period: v as typeof formData.period}))}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="weekly">Weekly</SelectItem>

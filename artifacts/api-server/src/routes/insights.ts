@@ -5,7 +5,8 @@ import { requireAuth } from "../middlewares/auth";
 
 const router = Router();
 
-router.get("/insights", requireAuth, async (_req, res): Promise<void> => {
+router.get("/insights", requireAuth, async (req, res): Promise<void> => {
+  const userId = req.user!.userId;
   const now = new Date();
   const thisMonthFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
   const thisMonthTo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
@@ -16,16 +17,16 @@ router.get("/insights", requireAuth, async (_req, res): Promise<void> => {
 
   const [thisMonthExpenses, lastMonthExpenses, budgets, categorySpend] = await Promise.all([
     db.select({ total: sql<string>`coalesce(sum(amount), 0)` }).from(transactionsTable)
-      .where(and(eq(transactionsTable.type, "expense"), gte(transactionsTable.date, thisMonthFrom), lte(transactionsTable.date, thisMonthTo))),
+      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"), gte(transactionsTable.date, thisMonthFrom), lte(transactionsTable.date, thisMonthTo))),
     db.select({ total: sql<string>`coalesce(sum(amount), 0)` }).from(transactionsTable)
-      .where(and(eq(transactionsTable.type, "expense"), gte(transactionsTable.date, lastMonthFrom), lte(transactionsTable.date, lastMonthTo))),
-    db.select().from(budgetsTable),
+      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"), gte(transactionsTable.date, lastMonthFrom), lte(transactionsTable.date, lastMonthTo))),
+    db.select().from(budgetsTable).where(eq(budgetsTable.profileId, userId)),
     db.select({
       category: transactionsTable.category,
       thisMonth: sql<string>`coalesce(sum(case when ${transactionsTable.date} >= ${thisMonthFrom} and ${transactionsTable.date} <= ${thisMonthTo} then ${transactionsTable.amount} else 0 end), 0)`,
       lastMonth: sql<string>`coalesce(sum(case when ${transactionsTable.date} >= ${lastMonthFrom} and ${transactionsTable.date} <= ${lastMonthTo} then ${transactionsTable.amount} else 0 end), 0)`,
     }).from(transactionsTable)
-      .where(and(eq(transactionsTable.type, "expense"), gte(transactionsTable.date, lastMonthFrom)))
+      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"), gte(transactionsTable.date, lastMonthFrom)))
       .groupBy(transactionsTable.category),
   ]);
 
@@ -49,16 +50,10 @@ router.get("/insights", requireAuth, async (_req, res): Promise<void> => {
   }
 
   // Budget overruns
+  const spendByCategory = new Map(categorySpend.map(row => [row.category, Number(row.thisMonth)]));
   for (const budget of budgets) {
     if (budget.period !== "monthly") continue;
-    const spent = parseFloat((await db.select({ total: sql<string>`coalesce(sum(amount), 0)` })
-      .from(transactionsTable)
-      .where(and(
-        eq(transactionsTable.type, "expense"),
-        gte(transactionsTable.date, thisMonthFrom),
-        lte(transactionsTable.date, thisMonthTo),
-        ...(budget.category ? [eq(transactionsTable.category, budget.category)] : [])
-      )))[0]?.total ?? "0");
+    const spent = budget.category ? (spendByCategory.get(budget.category) ?? 0) : thisMonth;
     const budgetAmt = parseFloat(budget.amount);
     if (spent > budgetAmt) {
       insights.push({
@@ -109,7 +104,7 @@ router.get("/insights", requireAuth, async (_req, res): Promise<void> => {
   if (thisMonth > 0 && lastMonth2 > 0) {
     const thisMonthIncome = parseFloat((await db.select({ total: sql<string>`coalesce(sum(amount), 0)` })
       .from(transactionsTable)
-      .where(and(eq(transactionsTable.type, "income"), gte(transactionsTable.date, thisMonthFrom), lte(transactionsTable.date, thisMonthTo))))[0]?.total ?? "0");
+      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "income"), gte(transactionsTable.date, thisMonthFrom), lte(transactionsTable.date, thisMonthTo))))[0]?.total ?? "0");
 
     const savingsRate = thisMonthIncome > 0 ? (thisMonthIncome - thisMonth) / thisMonthIncome : 0;
     if (savingsRate < 0.1 && thisMonthIncome > 0) {

@@ -43,7 +43,7 @@ export default function Setup() {
         setLocation('/dashboard');
       },
       onError: (err) => {
-        toast({ title: 'Setup failed', description: err.error || 'Something went wrong', variant: 'destructive' });
+        toast({ title: 'Setup failed', description: (err.data as any)?.error || err.message || 'Something went wrong', variant: 'destructive' });
       }
     });
   };

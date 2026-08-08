@@ -20,6 +20,8 @@ import { Input } from '@/components/ui/input';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 import { useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
 import {
   Dialog,
   DialogContent,
@@ -200,12 +202,18 @@ function TransactionForm({ tx, onClose }: { tx: Transaction | null, onClose: () 
   const createCat = useCreateCategory();
   
   const { data: categoriesData } = useListCategories();
-  const categories = categoriesData?.data || [];
+  const categories = categoriesData || [];
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['accounts'],
+    queryFn: () => customFetch<Array<{ id: number; name: string; currentBalance: number }>>('/api/accounts', { responseType: 'json' }),
+    staleTime: 30_000,
+  });
 
   const [formData, setFormData] = useState({
     type: tx?.type || 'expense',
     amount: tx?.amount?.toString() || '',
     date: tx?.date || new Date().toISOString().split('T')[0],
+    accountId: String((tx as any)?.accountId || ''),
     category: tx?.category || '',
     description: tx?.description || '',
     needOrWant: tx?.needOrWant || 'need',
@@ -311,7 +319,14 @@ function TransactionForm({ tx, onClose }: { tx: Transaction | null, onClose: () 
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground uppercase tracking-wider">Account</Label>
+              <Select value={formData.accountId} onValueChange={value => setFormData(p => ({ ...p, accountId: value }))}>
+                <SelectTrigger className="bg-background/50"><SelectValue placeholder="Primary account" /></SelectTrigger>
+                <SelectContent>{accounts.map(account => <SelectItem key={account.id} value={String(account.id)}>{account.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground uppercase tracking-wider">Date</Label>
               <DatePicker

@@ -2,7 +2,7 @@ import { Link, useLocation } from 'wouter';
 import {
   LayoutDashboard, Wallet, PieChart, Target,
   CalendarDays, Bell, LineChart, FileText,
-  Settings, Sparkles, LogOut, Zap
+  Settings, Sparkles, LogOut, Zap, Landmark, Route, HeartPulse, FolderKanban, SlidersHorizontal
 } from 'lucide-react';
 import { useGetMe, useLogout } from '@workspace/api-client-react';
 import { clearToken } from '@/lib/api-client';
@@ -12,7 +12,9 @@ const sections = [
   {
     label: 'Overview',
     items: [
+      { href: '/command',      label: 'Command Centre', icon: Zap },
       { href: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
+      { href: '/accounts',     label: 'Accounts',     icon: Landmark },
       { href: '/transactions', label: 'Transactions', icon: Wallet },
       { href: '/budgets',      label: 'Budgets',      icon: PieChart },
       { href: '/goals',        label: 'Goals',        icon: Target },
@@ -21,6 +23,9 @@ const sections = [
   {
     label: 'Planning',
     items: [
+      { href: '/plan',      label: 'Financial Plan', icon: Route },
+      { href: '/wealth',    label: 'Financial Health', icon: HeartPulse },
+      { href: '/organize',  label: 'Workspace', icon: FolderKanban },
       { href: '/calendar',  label: 'Calendar',  icon: CalendarDays },
       { href: '/reminders', label: 'Reminders', icon: Bell },
     ]
@@ -30,7 +35,8 @@ const sections = [
     items: [
       { href: '/analytics', label: 'Analytics',   icon: LineChart },
       { href: '/reports',   label: 'Reports',     icon: FileText },
-      { href: '/insights',  label: 'AI Insights', icon: Sparkles },
+      { href: '/insights',  label: 'Smart Insights', icon: Sparkles },
+      { href: '/studio',    label: 'Experience Studio', icon: SlidersHorizontal },
     ]
   },
 ];
@@ -57,7 +63,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="h-16 flex items-center px-5 border-b border-border/40 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-primary to-emerald-400 flex items-center justify-center shadow-md shadow-primary/30">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-red-400 via-primary to-red-800 flex items-center justify-center shadow-md shadow-primary/30">
             <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
           </div>
           <span className="font-display font-bold text-[17px] tracking-tight">Finance Intelli</span>

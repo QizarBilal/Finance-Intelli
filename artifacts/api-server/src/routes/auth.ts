@@ -1,8 +1,11 @@
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 import bcrypt from "bcryptjs";
-import { db, profileTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
-import { signToken, requireAuth } from "../middlewares/auth";
+import { db, profileTable, sessionsTable } from "@workspace/db";
+import { and, eq, isNull } from "drizzle-orm";
+import { issueSession, requireAuth, revokeSession, rotateSession } from "../middlewares/auth";
+import { ensureDefaultAccount } from "../lib/accounts";
+import { writeAudit } from "../lib/audit";
 import {
   SetupProfileBody,
   LoginBody,
@@ -11,6 +14,11 @@ import {
 } from "@workspace/api-zod";
 
 const router = Router();
+const authLimiter = rateLimit({
+  windowMs: 15 * 60_000, limit: 10, skipSuccessfulRequests: true,
+  standardHeaders: "draft-8", legacyHeaders: false,
+  message: { error: "Too many authentication attempts. Please wait before retrying." },
+});
 
 // Auth check — always true (multi-user signup supported)
 router.get("/auth/check", async (_req, res): Promise<void> => {
@@ -18,7 +26,7 @@ router.get("/auth/check", async (_req, res): Promise<void> => {
 });
 
 // Register / create account
-router.post("/auth/setup", async (req, res): Promise<void> => {
+router.post("/auth/setup", authLimiter, async (req, res): Promise<void> => {
   const parsed = SetupProfileBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -52,10 +60,11 @@ router.post("/auth/setup", async (req, res): Promise<void> => {
     salaryFrequency: salaryFrequency ?? null,
   }).returning();
 
-  const token = signToken({ userId: profile.id, username: profile.username }, true);
+  await ensureDefaultAccount(profile.id, profile.currency);
+  await issueSession(req, res, profile, true);
 
   res.status(201).json({
-    token,
+    token: "cookie-session",
     profile: {
       id: profile.id,
       username: profile.username,
@@ -70,6 +79,8 @@ router.post("/auth/setup", async (req, res): Promise<void> => {
       theme: profile.theme,
       weekStarts: profile.weekStarts,
       salaryFrequency: profile.salaryFrequency,
+      timezone: profile.timezone,
+      locale: profile.locale,
       photo: profile.photo,
       createdAt: profile.createdAt.toISOString(),
     },
@@ -77,7 +88,7 @@ router.post("/auth/setup", async (req, res): Promise<void> => {
 });
 
 // Login
-router.post("/auth/login", async (req, res): Promise<void> => {
+router.post("/auth/login", authLimiter, async (req, res): Promise<void> => {
   const parsed = LoginBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -87,21 +98,29 @@ router.post("/auth/login", async (req, res): Promise<void> => {
   const { username, password, rememberMe } = parsed.data;
   const [profile] = await db.select().from(profileTable).where(eq(profileTable.username, username)).limit(1);
 
-  if (!profile) {
+  if (!profile || (profile.lockedUntil && profile.lockedUntil > new Date())) {
+    await bcrypt.compare(password, "$2b$12$wrr4AiR78lM1kfeBavt8EuMkFiwQfGgK5u8oNO9hFYRVohNrwlhpS");
     res.status(401).json({ error: "Invalid username or password" });
     return;
   }
 
   const valid = await bcrypt.compare(password, profile.passwordHash);
   if (!valid) {
+    const failures = profile.failedLoginCount + 1;
+    await db.update(profileTable).set({
+      failedLoginCount: failures,
+      lockedUntil: failures >= 5 ? new Date(Date.now() + Math.min(30, 2 ** (failures - 5)) * 60_000) : null,
+    }).where(eq(profileTable.id, profile.id));
     res.status(401).json({ error: "Invalid username or password" });
     return;
   }
 
-  const token = signToken({ userId: profile.id, username: profile.username }, rememberMe ?? true);
+  await db.update(profileTable).set({ failedLoginCount: 0, lockedUntil: null }).where(eq(profileTable.id, profile.id));
+  await issueSession(req, res, profile, rememberMe ?? true);
+  await writeAudit(req, "login", "session", null, null, { username: profile.username });
 
   res.json({
-    token,
+    token: "cookie-session",
     profile: {
       id: profile.id,
       username: profile.username,
@@ -116,6 +135,8 @@ router.post("/auth/login", async (req, res): Promise<void> => {
       theme: profile.theme,
       weekStarts: profile.weekStarts,
       salaryFrequency: profile.salaryFrequency,
+      timezone: profile.timezone,
+      locale: profile.locale,
       photo: profile.photo,
       createdAt: profile.createdAt.toISOString(),
     },
@@ -123,8 +144,36 @@ router.post("/auth/login", async (req, res): Promise<void> => {
 });
 
 // Logout (stateless JWT — just acknowledge)
-router.post("/auth/logout", (_req, res): void => {
+router.post("/auth/logout", async (req, res): Promise<void> => {
+  await revokeSession(req, res);
   res.json({ message: "Logged out successfully" });
+});
+
+router.post("/auth/refresh", async (req, res): Promise<void> => {
+  const payload = await rotateSession(req, res);
+  if (!payload) { res.status(401).json({ error: "Session expired" }); return; }
+  res.json({ ok: true });
+});
+
+router.get("/auth/sessions", requireAuth, async (req, res): Promise<void> => {
+  const sessions = await db.select({
+    id: sessionsTable.id, userAgent: sessionsTable.userAgent, ipAddress: sessionsTable.ipAddress,
+    lastUsedAt: sessionsTable.lastUsedAt, expiresAt: sessionsTable.expiresAt, createdAt: sessionsTable.createdAt,
+  }).from(sessionsTable).where(and(
+    eq(sessionsTable.profileId, req.user!.userId),
+    isNull(sessionsTable.revokedAt),
+  )).orderBy(sessionsTable.createdAt);
+  res.json(sessions.map(session => ({ ...session, current: session.id === req.user!.sessionId })));
+});
+
+router.delete("/auth/sessions/:id", requireAuth, async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  const [session] = await db.update(sessionsTable).set({ revokedAt: new Date() }).where(and(
+    eq(sessionsTable.id, id), eq(sessionsTable.profileId, req.user!.userId),
+  )).returning();
+  if (!session) { res.status(404).json({ error: "Session not found" }); return; }
+  await writeAudit(req, "revoke", "session", id);
+  res.sendStatus(204);
 });
 
 // Get current user
@@ -148,6 +197,8 @@ router.get("/auth/me", requireAuth, async (req, res): Promise<void> => {
     theme: profile.theme,
     weekStarts: profile.weekStarts,
     salaryFrequency: profile.salaryFrequency,
+    timezone: profile.timezone,
+    locale: profile.locale,
     photo: profile.photo,
     createdAt: profile.createdAt.toISOString(),
   });
@@ -174,6 +225,11 @@ router.patch("/auth/profile", requireAuth, async (req, res): Promise<void> => {
   if (data.theme != null) updates.theme = data.theme;
   if (data.weekStarts != null) updates.weekStarts = data.weekStarts;
   if (data.salaryFrequency != null) updates.salaryFrequency = data.salaryFrequency;
+  if (typeof req.body.timezone === "string") {
+    try { Intl.DateTimeFormat(undefined, { timeZone: req.body.timezone }); updates.timezone = req.body.timezone; }
+    catch { res.status(400).json({ error: "Invalid IANA time zone" }); return; }
+  }
+  if (typeof req.body.locale === "string") updates.locale = req.body.locale.slice(0, 20);
   if (data.photo != null) updates.photo = data.photo;
 
   const [profile] = await db.update(profileTable).set(updates).where(eq(profileTable.id, req.user!.userId)).returning();
@@ -192,13 +248,15 @@ router.patch("/auth/profile", requireAuth, async (req, res): Promise<void> => {
     theme: profile.theme,
     weekStarts: profile.weekStarts,
     salaryFrequency: profile.salaryFrequency,
+    timezone: profile.timezone,
+    locale: profile.locale,
     photo: profile.photo,
     createdAt: profile.createdAt.toISOString(),
   });
 });
 
 // Change password
-router.patch("/auth/password", requireAuth, async (req, res): Promise<void> => {
+router.patch("/auth/password", authLimiter, requireAuth, async (req, res): Promise<void> => {
   const parsed = ChangePasswordBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -216,6 +274,10 @@ router.patch("/auth/password", requireAuth, async (req, res): Promise<void> => {
 
   const passwordHash = await bcrypt.hash(newPassword, 12);
   await db.update(profileTable).set({ passwordHash }).where(eq(profileTable.id, req.user!.userId));
+  await db.update(sessionsTable).set({ revokedAt: new Date() })
+    .where(eq(sessionsTable.profileId, req.user!.userId));
+  await issueSession(req, res, profile, true);
+  await writeAudit(req, "change_password", "profile", profile.id);
 
   res.json({ message: "Password changed successfully" });
 });

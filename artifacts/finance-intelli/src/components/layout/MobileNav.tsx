@@ -1,11 +1,11 @@
 import { Link, useLocation } from 'wouter';
-import { LayoutDashboard, Wallet, Sparkles, Target, Settings } from 'lucide-react';
+import { Zap, Wallet, Landmark, HeartPulse, Settings } from 'lucide-react';
 
 const navItems = [
-  { href: '/dashboard', icon: LayoutDashboard },
+  { href: '/command', icon: Zap },
   { href: '/transactions', icon: Wallet },
-  { href: '/insights', icon: Sparkles },
-  { href: '/goals', icon: Target },
+  { href: '/accounts', icon: Landmark },
+  { href: '/wealth', icon: HeartPulse },
   { href: '/settings', icon: Settings },
 ];
 

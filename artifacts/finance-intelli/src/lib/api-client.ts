@@ -5,19 +5,17 @@ import { setAuthTokenGetter, setBaseUrl } from '@workspace/api-client-react/cust
 setBaseUrl(import.meta.env.BASE_URL.replace(/\/$/, ''));
 
 // Setup token getter for authentication
-setAuthTokenGetter(() => {
-  return localStorage.getItem('finance_token');
-});
+setAuthTokenGetter(null);
 
 // Helper functions for token management
-export function setToken(token: string) {
-  localStorage.setItem('finance_token', token);
+export function setToken(_token?: string) {
+  sessionStorage.setItem('finance_session', '1');
 }
 
 export function clearToken() {
-  localStorage.removeItem('finance_token');
+  sessionStorage.removeItem('finance_session');
 }
 
 export function hasToken(): boolean {
-  return !!localStorage.getItem('finance_token');
+  return true;
 }

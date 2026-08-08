@@ -74,10 +74,10 @@ export default function Signup() {
       {/* ── Left branding panel ── */}
       <div className="hidden lg:flex flex-col justify-between w-[52%] relative bg-gradient-to-br from-[hsl(224,22%,5%)] to-[hsl(224,24%,9%)] p-12 overflow-hidden">
         <div className="absolute top-0 left-0 w-[600px] h-[600px] -translate-x-1/3 -translate-y-1/3 bg-primary/15 rounded-full blur-[100px] pointer-events-none" />
-        <div className="absolute bottom-0 right-0 w-[400px] h-[400px] translate-x-1/4 translate-y-1/4 bg-emerald-500/10 rounded-full blur-[80px] pointer-events-none" />
+        <div className="absolute bottom-0 right-0 w-[400px] h-[400px] translate-x-1/4 translate-y-1/4 bg-red-500/10 rounded-full blur-[80px] pointer-events-none" />
 
         <div className="flex items-center gap-3 z-10">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-emerald-400 flex items-center justify-center shadow-lg shadow-primary/30">
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-400 via-primary to-red-800 flex items-center justify-center shadow-lg shadow-primary/30">
             <Zap className="w-[18px] h-[18px] text-white" strokeWidth={2.5} />
           </div>
           <span className="font-display font-bold text-lg text-white/90 tracking-tight">Finance Intelli</span>
@@ -125,7 +125,7 @@ export default function Signup() {
         <div className="w-full max-w-sm z-10">
           {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-2.5 mb-10">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary to-emerald-400 flex items-center justify-center shadow-lg shadow-primary/30">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-400 via-primary to-red-800 flex items-center justify-center shadow-lg shadow-primary/30">
               <Zap className="w-4 h-4 text-white" strokeWidth={2.5} />
             </div>
             <span className="font-display font-bold text-lg tracking-tight">Finance Intelli</span>

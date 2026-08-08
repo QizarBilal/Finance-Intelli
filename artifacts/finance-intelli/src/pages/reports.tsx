@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { formatCurrency } from '@/lib/utils';
 import { format, startOfMonth, endOfMonth, startOfYear, endOfYear, subMonths, subDays } from 'date-fns';
+import { useQuery } from '@tanstack/react-query';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
 
 type Period = 'this-month' | 'last-month' | 'last-3-months' | 'this-year' | 'all-time';
 
@@ -75,26 +77,26 @@ export default function Reports() {
   const [period, setPeriod] = useState<Period>('this-month');
   const { from, to, label } = getPeriodDates(period);
 
-  const { data: txData, isLoading } = useListTransactions({ dateFrom: from, dateTo: to, limit: 2000 });
+  const { data: txData, isLoading } = useListTransactions({ dateFrom: from, dateTo: to, limit: 10 });
   const { data: summary } = useGetDashboardSummary();
+  const queryString = new URLSearchParams({ dateFrom: from, dateTo: to }).toString();
+  const { data: report } = useQuery({
+    queryKey: ['report-summary', from, to],
+    queryFn: () => customFetch<any>(`/api/reports/summary?${queryString}`, { responseType: 'json' }),
+  });
 
   const transactions: Transaction[] = txData?.data || [];
   const total = txData?.total ?? 0;
 
-  const income = transactions.filter(t => t.type === 'income').reduce((s, t) => s + t.amount, 0);
-  const expense = transactions.filter(t => t.type === 'expense').reduce((s, t) => s + t.amount, 0);
+  const income = report?.income ?? 0;
+  const expense = report?.expense ?? 0;
   const savings = income - expense;
 
   // Category breakdown
-  const categoryMap: Record<string, number> = {};
-  transactions.filter(t => t.type === 'expense').forEach(t => {
-    const cat = t.category || 'Uncategorized';
-    categoryMap[cat] = (categoryMap[cat] || 0) + t.amount;
-  });
-  const topCategories = Object.entries(categoryMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const topCategories: [string, number][] = (report?.categories ?? []).slice(0, 5).map((item: any) => [item.category, item.amount]);
 
   // Tax deductible total
-  const taxDeductible = transactions.filter(t => t.taxDeductible).reduce((s, t) => s + t.amount, 0);
+  const taxDeductible = report?.taxDeductible ?? 0;
 
   const summaryPayload = { period: label, from, to, income, expense, savings, transactionCount: total, taxDeductible, topCategories: Object.fromEntries(topCategories) };
 
@@ -180,10 +182,10 @@ export default function Reports() {
           <Button
             className="w-full"
             disabled={isLoading || transactions.length === 0}
-            onClick={() => downloadCSV(transactions, label)}
+            onClick={() => { window.location.href = `/api/reports/export.csv?${queryString}`; }}
           >
             <Download className="w-4 h-4 mr-2" />
-            {isLoading ? 'Loading…' : `Download CSV (${total} rows)`}
+            {isLoading ? 'Loading…' : `Download complete CSV (${total} rows)`}
           </Button>
         </div>
 
@@ -191,18 +193,18 @@ export default function Reports() {
           <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mb-4">
             <FileText className="w-6 h-6 text-emerald-500" />
           </div>
-          <h3 className="text-xl font-semibold mb-1">Export as JSON</h3>
+          <h3 className="text-xl font-semibold mb-1">PDF Statement</h3>
           <p className="text-muted-foreground text-sm mb-6">
-            Complete data export with summary stats, all transactions, and category breakdowns.
+            Generate a print-ready statement from server-verified financial data.
           </p>
           <Button
             className="w-full"
             variant="secondary"
             disabled={isLoading || transactions.length === 0}
-            onClick={() => downloadJSON(transactions, summaryPayload, label)}
+            onClick={() => { window.location.href = `/api/reports/statement.pdf?${queryString}`; }}
           >
             <Download className="w-4 h-4 mr-2" />
-            {isLoading ? 'Loading…' : `Download JSON`}
+            {isLoading ? 'Loading…' : 'Download PDF'}
           </Button>
         </div>
       </div>

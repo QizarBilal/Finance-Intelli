@@ -62,8 +62,8 @@ export default function Dashboard() {
           value={summary?.balance} 
           isLoading={isSummaryLoading}
           icon={Wallet}
-          trend="+2.4% this month"
-          trendUp={true}
+          trend={`${(summary as any)?.balanceTrendPercent ?? 0}% this month`}
+          trendUp={((summary as any)?.balanceTrendPercent ?? 0) >= 0}
           primary
         />
         <MetricCard 
@@ -136,7 +136,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Health Score & AI Insights */}
+        {/* Health Score & Smart Insights */}
         <div className="space-y-6">
           <div className="glass-card rounded-2xl p-6">
             <div className="flex justify-between items-start mb-4">
@@ -147,7 +147,7 @@ export default function Dashboard() {
             </div>
             <div className="flex items-end gap-4">
               <div className="text-5xl font-display font-bold text-primary">
-                {summary?.financialHealthScore || '--'}
+                {summary?.financialHealthScore ?? '--'}
               </div>
               <div className="pb-1 text-muted-foreground text-sm">
                 / 100
@@ -170,7 +170,7 @@ export default function Dashboard() {
             </div>
             <h2 className="text-lg font-semibold flex items-center gap-2 mb-4">
               <Sparkles className="w-5 h-5 text-primary" />
-              AI Insight
+              Smart Insight
             </h2>
             {insights && insights.length > 0 ? (
               <div className="space-y-1">
@@ -199,9 +199,9 @@ export default function Dashboard() {
         <div className="glass-card rounded-2xl overflow-hidden">
           {isRecentLoading ? (
             <div className="p-8 text-center text-muted-foreground">Loading transactions...</div>
-          ) : recent?.data && recent.data.length > 0 ? (
+          ) : Array.isArray(recent) && recent.length > 0 ? (
             <div className="divide-y divide-border/50">
-              {recent.data.map((tx) => (
+              {(recent as any[]).map((tx) => (
                 <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-white/5 transition-colors">
                   <div className="flex items-center gap-4">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center ${

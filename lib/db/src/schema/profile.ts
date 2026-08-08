@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
+import { boolean, integer, pgTable, text, serial, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -17,6 +17,14 @@ export const profileTable = pgTable("profile", {
   theme: text("theme").notNull().default("dark"),
   weekStarts: text("week_starts").notNull().default("monday"),
   salaryFrequency: text("salary_frequency"),
+  timezone: text("timezone").notNull().default("UTC"),
+  locale: text("locale").notNull().default("en-IN"),
+  email: text("email").unique(),
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  failedLoginCount: integer("failed_login_count").notNull().default(0),
+  lockedUntil: timestamp("locked_until", { withTimezone: true }),
+  mfaEnabled: boolean("mfa_enabled").notNull().default(false),
+  version: integer("version").notNull().default(1),
   photo: text("photo"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

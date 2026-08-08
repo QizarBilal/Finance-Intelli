@@ -60,16 +60,15 @@ export default function Settings() {
   const handleExport = async () => {
     setIsExporting(true);
     try {
-      const token = localStorage.getItem('finance_token');
       const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-      const headers = { Authorization: `Bearer ${token}` };
+      const requestOptions: RequestInit = { credentials: 'include' };
 
       const [txRes, budgetsRes, goalsRes, remindersRes, catsRes] = await Promise.all([
-        fetch(`${base}/api/transactions?limit=9999`, { headers }),
-        fetch(`${base}/api/budgets`, { headers }),
-        fetch(`${base}/api/goals`, { headers }),
-        fetch(`${base}/api/reminders`, { headers }),
-        fetch(`${base}/api/categories`, { headers }),
+        fetch(`${base}/api/transactions?limit=9999`, requestOptions),
+        fetch(`${base}/api/budgets`, requestOptions),
+        fetch(`${base}/api/goals`, requestOptions),
+        fetch(`${base}/api/reminders`, requestOptions),
+        fetch(`${base}/api/categories`, requestOptions),
       ]);
 
       const [txData, budgets, goals, reminders, categories] = await Promise.all([
@@ -115,11 +114,10 @@ export default function Settings() {
   const handleResetData = async () => {
     setIsResetting(true);
     try {
-      const token = localStorage.getItem('finance_token');
       const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       const res = await fetch(`${base}/api/reset`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` },
+        credentials: 'include',
       });
       if (!res.ok) throw new Error();
       await queryClient.invalidateQueries();
