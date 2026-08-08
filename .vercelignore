@@ -1,0 +1,10 @@
+.git
+.agents
+.local
+.vercel
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+attached_assets
+artifacts/mockup-sandbox
