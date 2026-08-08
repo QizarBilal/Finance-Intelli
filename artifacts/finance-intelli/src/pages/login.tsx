@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Zap, Loader2, ArrowRight } from 'lucide-react';
+import { Zap, Loader2, ArrowRight, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 export default function Login() {
@@ -17,6 +17,7 @@ export default function Login() {
   const loginMutation = useLogin();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,8 +95,15 @@ export default function Login() {
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)}
-                className="h-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="••••••••" />
+              <div className="relative">
+                <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={e => setPassword(e.target.value)}
+                  className="h-11 pr-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="••••••••" />
+                <button type="button" onClick={() => setShowPassword(value => !value)}
+                  className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                  aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
             </div>
             <Button className="w-full h-11 mt-2 bg-primary hover:bg-primary/90 font-semibold shadow-md shadow-primary/25 gap-2"
               size="lg" type="submit" disabled={loginMutation.isPending || !username || !password}>

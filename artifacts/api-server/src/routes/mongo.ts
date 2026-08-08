@@ -19,7 +19,7 @@ async function createOwned(req: Request, name: string, values: Record<string, un
   return expose(row);
 }
 
-router.post("/auth/signup", async (req, res) => {
+router.post(["/auth/signup", "/auth/setup"], async (req, res) => {
   const username = clean(req.body.username).toLowerCase();
   const password = clean(req.body.password);
   const email = clean(req.body.email).toLowerCase() || undefined;
@@ -27,7 +27,7 @@ router.post("/auth/signup", async (req, res) => {
   const profiles = await collection("profiles");
   if (await profiles.findOne({ $or: [{ username }, ...(email ? [{ email }] : [])] })) { res.status(409).json({ error: "Account already exists" }); return; }
   const id = await nextId("profiles");
-  const profile = { id, username, email, passwordHash: await bcrypt.hash(password, 12), name: clean(req.body.name) || username, currency: "USD", timezone: "UTC", theme: "system", weekStarts: "monday", setupCompleted: false, failedLoginCount: 0, createdAt: now(), updatedAt: now() };
+  const profile = { id, username, ...(email ? { email } : {}), passwordHash: await bcrypt.hash(password, 12), name: clean(req.body.name) || username, occupation: clean(req.body.occupation) || undefined, jobStatus: clean(req.body.jobStatus) || undefined, currency: clean(req.body.currency) || "INR", timezone: "UTC", theme: clean(req.body.theme) || "system", weekStarts: "monday", setupCompleted: true, failedLoginCount: 0, createdAt: now(), updatedAt: now() };
   await profiles.insertOne(profile);
   await issueSession(req, res, profile);
   res.status(201).json({ user: { id, username, name: profile.name, email: profile.email } });
@@ -44,7 +44,7 @@ router.post("/auth/login", async (req, res) => {
 router.post("/auth/refresh", async (req, res) => { const payload = await rotateSession(req, res); payload ? res.json({ ok: true }) : res.status(401).json({ error: "Invalid session" }); });
 router.post("/auth/logout", async (req, res) => { await revokeSession(req, res); res.json({ ok: true }); });
 
-router.get("/profile", requireAuth, async (req, res) => { const row = await (await collection("profiles")).findOne({ id: userId(req) }, { projection: { passwordHash: 0 } }); res.json(expose(row)); });
+router.get(["/profile", "/auth/me"], requireAuth, async (req, res) => { const row = await (await collection("profiles")).findOne({ id: userId(req) }, { projection: { passwordHash: 0 } }); res.json(expose(row)); });
 router.get("/profile/setup-status", requireAuth, async (req, res) => { const row = await (await collection("profiles")).findOne({ id: userId(req) }, { projection: { setupCompleted: 1 } }); res.json({ setupCompleted: Boolean(row?.setupCompleted) }); });
 router.post("/profile/setup", requireAuth, async (req, res) => { const values = { name: clean(req.body.name), currency: clean(req.body.currency) || "USD", timezone: clean(req.body.timezone) || "UTC", weekStarts: clean(req.body.weekStarts) || "monday", setupCompleted: true, updatedAt: now() }; const profiles = await collection("profiles"); await profiles.updateOne({ id: userId(req) }, { $set: values }); res.json(expose(await profiles.findOne({ id: userId(req) }, { projection: { passwordHash: 0 } }))); });
 router.patch("/profile", requireAuth, async (req, res) => { const allowed = ["name", "email", "currency", "timezone", "theme", "weekStarts"]; const values = Object.fromEntries(allowed.filter(k => req.body[k] !== undefined).map(k => [k, clean(req.body[k])])); const profiles = await collection("profiles"); await profiles.updateOne({ id: userId(req) }, { $set: { ...values, updatedAt: now() } }); res.json(expose(await profiles.findOne({ id: userId(req) }, { projection: { passwordHash: 0 } }))); });

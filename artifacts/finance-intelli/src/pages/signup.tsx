@@ -7,7 +7,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Zap, Loader2, ArrowRight, ArrowLeft, IndianRupee, User, Lock, Briefcase, CheckCircle2 } from 'lucide-react';
+import { Zap, Loader2, ArrowRight, ArrowLeft, IndianRupee, User, Lock, Briefcase, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const STEPS = ['Account', 'Profile'];
@@ -18,6 +18,8 @@ export default function Signup() {
   const queryClient = useQueryClient();
   const signupMutation = useSetupProfile();
   const [step, setStep] = useState(0);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [form, setForm] = useState({
     name: '',
@@ -37,7 +39,7 @@ export default function Signup() {
   const validateStep0 = () => {
     if (!form.name.trim()) return 'Full name is required.';
     if (form.username.length < 3) return 'Username must be at least 3 characters.';
-    if (form.password.length < 6) return 'Password must be at least 6 characters.';
+    if (form.password.length < 8) return 'Password must be at least 8 characters.';
     if (form.password !== form.confirmPassword) return 'Passwords do not match.';
     return null;
   };
@@ -115,7 +117,7 @@ export default function Signup() {
           </div>
         </motion.div>
 
-        <p className="z-10 text-white/25 text-xs">Finance Intelli · ₹ INR · Replit DB</p>
+        <p className="z-10 text-white/25 text-xs">Finance Intelli · ₹ INR · Private by design</p>
       </div>
 
       {/* ── Right form panel ── */}
@@ -171,16 +173,26 @@ export default function Signup() {
                   <Label htmlFor="password">Password</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                    <Input id="password" type="password" autoComplete="new-password" value={form.password} onChange={set('password')}
-                      className="h-11 pl-9 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="min. 6 characters" />
+                    <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={form.password} onChange={set('password')}
+                      className="h-11 pl-9 pr-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="min. 8 characters" />
+                    <button type="button" onClick={() => setShowPassword(value => !value)}
+                      className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="confirmPassword">Confirm Password</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                    <Input id="confirmPassword" type="password" autoComplete="new-password" value={form.confirmPassword} onChange={set('confirmPassword')}
-                      className="h-11 pl-9 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="••••••••" />
+                    <Input id="confirmPassword" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" value={form.confirmPassword} onChange={set('confirmPassword')}
+                      className="h-11 pl-9 pr-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="••••••••" />
+                    <button type="button" onClick={() => setShowConfirmPassword(value => !value)}
+                      className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
+                      aria-label={showConfirmPassword ? 'Hide confirmation password' : 'Show confirmation password'} aria-pressed={showConfirmPassword}>
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
                   </div>
                 </div>
                 <Button type="submit" className="w-full h-11 mt-2 bg-primary hover:bg-primary/90 font-semibold shadow-md shadow-primary/25 gap-2">
