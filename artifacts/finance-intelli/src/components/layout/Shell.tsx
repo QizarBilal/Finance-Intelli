@@ -4,15 +4,14 @@ import MobileNav from './MobileNav';
 import { motion } from 'framer-motion';
 import { useGetMe } from '@workspace/api-client-react';
 import GlobalCommand from './GlobalCommand';
+import { applyTheme, resolveTheme } from '@/lib/themes';
 
 interface ShellProps { children: ReactNode; }
 
 export default function Shell({ children }: ShellProps) {
   const { data: profile } = useGetMe();
   useEffect(() => {
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const theme = profile?.theme ?? 'system';
-    document.documentElement.classList.toggle('dark', theme === 'dark' || (theme === 'system' && prefersDark));
+    applyTheme(resolveTheme(profile?.theme));
   }, [profile?.theme]);
   return (
     <div className="flex min-h-screen bg-background text-foreground">

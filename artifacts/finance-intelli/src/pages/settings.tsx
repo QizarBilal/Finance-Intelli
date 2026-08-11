@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useLogout, useGetMe, useUpdateProfile } from '@workspace/api-client-react';
 import { clearToken } from '@/lib/api-client';
 import { useLocation } from 'wouter';
-import { LogOut, User, Sun, Database, RotateCcw, AlertTriangle, Download, Loader2 } from 'lucide-react';
+import { LogOut, User, Palette, Database, RotateCcw, AlertTriangle, Download, Loader2, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,6 +17,7 @@ import {
   DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
+import { appThemes, applyTheme, resolveTheme, type AppThemeId } from '@/lib/themes';
 
 export default function Settings() {
   const logout = useLogout();
@@ -32,6 +33,8 @@ export default function Settings() {
   const [editName, setEditName] = useState('');
   const [editOccupation, setEditOccupation] = useState('');
   const [editJobStatus, setEditJobStatus] = useState('');
+  const [themeOpen, setThemeOpen] = useState(false);
+  const [activeTheme, setActiveTheme] = useState<AppThemeId>(() => resolveTheme());
 
   const openEdit = () => {
     setEditName(profile?.name ?? '');
@@ -107,8 +110,9 @@ export default function Settings() {
     });
   };
 
-  const toggleTheme = () => {
-    document.documentElement.classList.toggle('dark');
+  const selectTheme = (theme: AppThemeId) => {
+    applyTheme(theme);
+    setActiveTheme(theme);
   };
 
   const handleResetData = async () => {
@@ -158,14 +162,14 @@ export default function Settings() {
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-              <Sun className="w-5 h-5 text-primary" />
+              <Palette className="w-5 h-5 text-primary" />
             </div>
             <div>
               <h3 className="font-medium text-lg">Appearance</h3>
-              <p className="text-sm text-muted-foreground">Toggle between light and dark mode</p>
+              <p className="text-sm text-muted-foreground">Choose from eight complete visual styles</p>
             </div>
           </div>
-          <Button variant="outline" onClick={toggleTheme}>Toggle Theme</Button>
+          <Button variant="outline" onClick={() => setThemeOpen(true)}>Change theme</Button>
         </div>
 
         {/* Export */}
@@ -240,6 +244,46 @@ export default function Settings() {
       </div>
 
       {/* Edit Profile Dialog */}
+      <Dialog open={themeOpen} onOpenChange={setThemeOpen}>
+        <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Change theme</DialogTitle>
+            <p className="text-sm text-muted-foreground">Choose a complete visual system. Your selection is applied instantly and remembered on this device.</p>
+          </DialogHeader>
+          <div className="grid gap-3 py-2 sm:grid-cols-2">
+            {appThemes.map((theme) => {
+              const selected = activeTheme === theme.id;
+              return (
+                <button
+                  key={theme.id}
+                  type="button"
+                  onClick={() => selectTheme(theme.id)}
+                  className={`group rounded-2xl border p-4 text-left transition-all hover:-translate-y-0.5 hover:shadow-lg ${selected ? 'border-primary bg-primary/10 ring-2 ring-primary/20' : 'border-border bg-card/70 hover:border-primary/40'}`}
+                  aria-pressed={selected}
+                >
+                  <div className="mb-4 flex h-16 overflow-hidden rounded-xl border border-black/10 shadow-inner">
+                    <span className="flex-[2]" style={{ background: theme.colors[0] }} />
+                    <span className="flex-1" style={{ background: theme.colors[1] }} />
+                    <span className="flex-1" style={{ background: theme.colors[2] }} />
+                  </div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold">{theme.name}</h3>
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{theme.mode}</span>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-muted-foreground">{theme.description}</p>
+                    </div>
+                    {selected && <Check className="mt-0.5 h-5 w-5 shrink-0 text-primary" />}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <DialogFooter><Button onClick={() => setThemeOpen(false)}>Done</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

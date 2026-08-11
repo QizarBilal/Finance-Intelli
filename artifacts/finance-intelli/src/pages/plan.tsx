@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
 import { formatCurrency } from '@/lib/utils';
+import PagePurpose from '@/components/PagePurpose';
 
 type Account = { id: number; name: string; currentBalance: number };
 type Forecast = { currentBalance: number; dailyAverage: number; scheduledOutflow: number; projectedBalance: number; days: number; explanation: string };
@@ -45,6 +46,12 @@ export default function Plan() {
 
   return <div className="space-y-7 pb-10">
     <header><p className="text-xs font-semibold uppercase tracking-[.16em] text-primary">Plan ahead</p><h1 className="mt-1 text-3xl font-bold">Financial plan</h1><p className="mt-1 text-sm text-muted-foreground">Forecast cash flow, choose a debt strategy, and bring statement history into one reliable ledger.</p></header>
+    <PagePurpose items={[
+      { icon: TrendingUp, title: 'Forecast your runway', description: 'See upcoming cash flow before bills and income land.' },
+      { icon: PiggyBank, title: 'Choose a debt strategy', description: 'Compare snowball and avalanche payoff approaches.' },
+      { icon: FileUp, title: 'Import statement history', description: 'Turn past statements into one dependable ledger.' },
+      { icon: ShieldCheck, title: 'Prepare with confidence', description: 'Spot shortfalls early and make a practical plan.' },
+    ]} />
     <Tabs defaultValue="forecast">
       <TabsList className="grid w-full grid-cols-3 sm:w-auto"><TabsTrigger value="forecast">Forecast</TabsTrigger><TabsTrigger value="debt">Debt plan</TabsTrigger><TabsTrigger value="import">Import</TabsTrigger></TabsList>
       <TabsContent value="forecast" className="mt-5 space-y-4">
