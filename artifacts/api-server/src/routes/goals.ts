@@ -1,173 +1,280 @@
 import { Router } from "express";
-import { accountsTable, db, goalContributionsTable, goalsTable, transactionsTable } from "@workspace/db";
-import { eq, and, sql } from "drizzle-orm";
+import {
+  collections,
+  getCollection,
+  nextId,
+  withoutMongoId,
+} from "@workspace/db";
 import { requireAuth } from "../middlewares/auth";
 import {
-  CreateGoalBody, UpdateGoalBody,
-  GetGoalParams, UpdateGoalParams, DeleteGoalParams,
-  ContributeToGoalParams, ContributeToGoalBody,
+  CreateGoalBody,
+  UpdateGoalBody,
+  GetGoalParams,
+  UpdateGoalParams,
+  DeleteGoalParams,
+  ContributeToGoalParams,
+  ContributeToGoalBody,
 } from "@workspace/api-zod";
 import { writeAudit } from "../lib/audit";
 
 const router = Router();
-
-function serializeGoal(g: typeof goalsTable.$inferSelect) {
-  return {
-    id: g.id, name: g.name,
-    targetAmount: parseFloat(g.targetAmount),
-    currentAmount: parseFloat(g.currentAmount),
-    deadline: g.deadline, priority: g.priority, color: g.color, icon: g.icon, notes: g.notes,
-    recurringContribution: g.recurringContribution != null ? parseFloat(g.recurringContribution) : null,
-    recurringFrequency: g.recurringFrequency, isCompleted: g.isCompleted,
-    createdAt: g.createdAt.toISOString(),
-  };
-}
-
-router.get("/goals", requireAuth, async (req, res): Promise<void> => {
-  const goals = await db.select().from(goalsTable)
-    .where(eq(goalsTable.profileId, req.user!.userId)).orderBy(goalsTable.createdAt);
-  res.json(goals.map(serializeGoal));
+const clean = (value: any) => withoutMongoId(value);
+const serialize = (g: any) => ({
+  ...clean(g),
+  targetAmount: Number(g.targetAmount),
+  currentAmount: Number(g.currentAmount),
+  recurringContribution:
+    g.recurringContribution == null ? null : Number(g.recurringContribution),
+  createdAt: new Date(g.createdAt).toISOString(),
 });
+const owned = (id: number, profileId: number) => ({ id, profileId });
 
-router.post("/goals", requireAuth, async (req, res): Promise<void> => {
-  const parsed = CreateGoalBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-
-  const data = parsed.data;
-  const [goal] = await db.insert(goalsTable).values({
+router.get("/goals", requireAuth, async (req, res) => {
+  const rows = await (
+    await getCollection(collections.goals)
+  )
+    .find({ profileId: req.user!.userId })
+    .sort({ createdAt: 1 })
+    .toArray();
+  res.json(rows.map(serialize));
+});
+router.post("/goals", requireAuth, async (req, res) => {
+  const p = CreateGoalBody.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  const now = new Date(),
+    d = p.data;
+  const row: any = {
+    id: await nextId(collections.goals),
     profileId: req.user!.userId,
-    name: data.name, targetAmount: String(data.targetAmount),
-    currentAmount: data.currentAmount != null ? String(data.currentAmount) : "0",
-    deadline: data.deadline ?? null, priority: data.priority ?? null,
-    color: data.color ?? null, icon: data.icon ?? null, notes: data.notes ?? null,
-    recurringContribution: data.recurringContribution != null ? String(data.recurringContribution) : null,
-    recurringFrequency: data.recurringFrequency ?? null, isCompleted: false,
-  }).returning();
-  res.status(201).json(serializeGoal(goal));
+    name: d.name,
+    targetAmount: d.targetAmount,
+    currentAmount: d.currentAmount ?? 0,
+    deadline: d.deadline ?? null,
+    priority: d.priority ?? null,
+    color: d.color ?? null,
+    icon: d.icon ?? null,
+    notes: d.notes ?? null,
+    recurringContribution: d.recurringContribution ?? null,
+    recurringFrequency: d.recurringFrequency ?? null,
+    isCompleted: false,
+    version: 1,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await (await getCollection(collections.goals)).insertOne(row);
+  res.status(201).json(serialize(row));
 });
-
-router.get("/goals/:id", requireAuth, async (req, res): Promise<void> => {
-  const params = GetGoalParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-
-  const [goal] = await db.select().from(goalsTable)
-    .where(and(eq(goalsTable.id, params.data.id), eq(goalsTable.profileId, req.user!.userId)));
-  if (!goal) { res.status(404).json({ error: "Goal not found" }); return; }
-  res.json(serializeGoal(goal));
+router.get("/goals/:id", requireAuth, async (req, res) => {
+  const p = GetGoalParams.safeParse(req.params);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  const row = await (
+    await getCollection(collections.goals)
+  ).findOne(owned(p.data.id, req.user!.userId));
+  if (!row) {
+    res.status(404).json({ error: "Goal not found" });
+    return;
+  }
+  res.json(serialize(row));
 });
-
-router.patch("/goals/:id", requireAuth, async (req, res): Promise<void> => {
-  const params = UpdateGoalParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-  const parsed = UpdateGoalBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-
-  const data = parsed.data;
-  const updates: Record<string, unknown> = {};
-  if (data.name != null) updates.name = data.name;
-  if (data.targetAmount != null) updates.targetAmount = String(data.targetAmount);
-  if (data.currentAmount != null) updates.currentAmount = String(data.currentAmount);
-  if (data.deadline != null) updates.deadline = data.deadline;
-  if (data.priority != null) updates.priority = data.priority;
-  if (data.color != null) updates.color = data.color;
-  if (data.icon != null) updates.icon = data.icon;
-  if (data.notes != null) updates.notes = data.notes;
-  if (data.recurringContribution != null) updates.recurringContribution = String(data.recurringContribution);
-  if (data.recurringFrequency != null) updates.recurringFrequency = data.recurringFrequency;
-  if (data.isCompleted != null) updates.isCompleted = data.isCompleted;
-
-  const [goal] = await db.update(goalsTable).set(updates)
-    .where(and(eq(goalsTable.id, params.data.id), eq(goalsTable.profileId, req.user!.userId))).returning();
-  if (!goal) { res.status(404).json({ error: "Goal not found" }); return; }
-  res.json(serializeGoal(goal));
+router.patch("/goals/:id", requireAuth, async (req, res) => {
+  const p = UpdateGoalParams.safeParse(req.params);
+  const b = UpdateGoalBody.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  if (!b.success) {
+    res.status(400).json({ error: b.error.message });
+    return;
+  }
+  const row = await (
+    await getCollection(collections.goals)
+  ).findOneAndUpdate(
+    owned(p.data.id, req.user!.userId),
+    { $set: { ...b.data, updatedAt: new Date() }, $inc: { version: 1 } },
+    { returnDocument: "after" },
+  );
+  if (!row) {
+    res.status(404).json({ error: "Goal not found" });
+    return;
+  }
+  res.json(serialize(row));
 });
-
-router.delete("/goals/:id", requireAuth, async (req, res): Promise<void> => {
-  const params = DeleteGoalParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-
-  const [deleted] = await db.delete(goalsTable)
-    .where(and(eq(goalsTable.id, params.data.id), eq(goalsTable.profileId, req.user!.userId))).returning();
-  if (!deleted) { res.status(404).json({ error: "Goal not found" }); return; }
+router.delete("/goals/:id", requireAuth, async (req, res) => {
+  const p = DeleteGoalParams.safeParse(req.params);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  const result = await (
+    await getCollection(collections.goals)
+  ).deleteOne(owned(p.data.id, req.user!.userId));
+  if (!result.deletedCount) {
+    res.status(404).json({ error: "Goal not found" });
+    return;
+  }
+  await (
+    await getCollection(collections.goalContributions)
+  ).deleteMany({ goalId: p.data.id, profileId: req.user!.userId });
   res.sendStatus(204);
 });
 
-router.post("/goals/:id/contribute", requireAuth, async (req, res): Promise<void> => {
-  const params = ContributeToGoalParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-  const parsed = ContributeToGoalBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-
-  const [current] = await db.select().from(goalsTable)
-    .where(and(eq(goalsTable.id, params.data.id), eq(goalsTable.profileId, req.user!.userId)));
-  if (!current) { res.status(404).json({ error: "Goal not found" }); return; }
-
-  const accountId = req.body?.accountId ? Number(req.body.accountId) : null;
-  if (accountId) {
-    const [account] = await db.select({ id: accountsTable.id }).from(accountsTable)
-      .where(and(eq(accountsTable.id, accountId), eq(accountsTable.profileId, req.user!.userId))).limit(1);
-    if (!account) { res.status(404).json({ error: "Account not found" }); return; }
+router.post("/goals/:id/contribute", requireAuth, async (req, res) => {
+  const p = ContributeToGoalParams.safeParse(req.params),
+    b = ContributeToGoalBody.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
   }
-  const newAmount = parseFloat(current.currentAmount) + parsed.data.amount;
-  const isCompleted = newAmount >= parseFloat(current.targetAmount);
-  const result = await db.transaction(async tx => {
-    let transactionId: number | null = null;
-    if (accountId) {
-      const [entry] = await tx.insert(transactionsTable).values({
-        profileId: req.user!.userId, accountId, type: "expense", direction: "debit",
-        amount: String(parsed.data.amount), date: new Date().toISOString().slice(0, 10),
-        description: `Contribution to ${current.name}`, category: "Savings goals",
-        status: "cleared",
-      }).returning({ id: transactionsTable.id });
-      transactionId = entry.id;
-    }
-    const [contribution] = await tx.insert(goalContributionsTable).values({
-      profileId: req.user!.userId, goalId: current.id, accountId, transactionId,
-      amount: String(parsed.data.amount), note: req.body?.note || null,
-    }).returning();
-    const [goal] = await tx.update(goalsTable)
-      .set({ currentAmount: String(newAmount), isCompleted, version: sql`${goalsTable.version} + 1` })
-      .where(and(eq(goalsTable.id, params.data.id), eq(goalsTable.profileId, req.user!.userId))).returning();
-    return { goal, contribution };
+  if (!b.success) {
+    res.status(400).json({ error: b.error.message });
+    return;
+  }
+  const profileId = req.user!.userId,
+    goals = await getCollection(collections.goals),
+    current: any = await goals.findOne(owned(p.data.id, profileId));
+  if (!current) {
+    res.status(404).json({ error: "Goal not found" });
+    return;
+  }
+  const accountId = req.body?.accountId ? Number(req.body.accountId) : null;
+  if (
+    accountId &&
+    !(await (
+      await getCollection(collections.accounts)
+    ).findOne(owned(accountId, profileId)))
+  ) {
+    res.status(404).json({ error: "Account not found" });
+    return;
+  }
+  const now = new Date(),
+    amount = Number(b.data.amount),
+    newAmount = Number(current.currentAmount) + amount;
+  let transactionId: number | null = null;
+  if (accountId) {
+    transactionId = await nextId(collections.transactions);
+    await (
+      await getCollection(collections.transactions)
+    ).insertOne({
+      id: transactionId,
+      profileId,
+      accountId,
+      type: "expense",
+      direction: "debit",
+      amount,
+      date: now.toISOString().slice(0, 10),
+      description: `Contribution to ${current.name}`,
+      category: "Savings goals",
+      status: "cleared",
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  const contribution: any = {
+    id: await nextId(collections.goalContributions),
+    profileId,
+    goalId: current.id,
+    accountId,
+    transactionId,
+    amount,
+    note: req.body?.note || null,
+    isReversed: false,
+    createdAt: now,
+    updatedAt: now,
+  };
+  await (
+    await getCollection(collections.goalContributions)
+  ).insertOne(contribution);
+  const goal: any = await goals.findOneAndUpdate(
+    owned(current.id, profileId),
+    {
+      $set: {
+        currentAmount: newAmount,
+        isCompleted: newAmount >= Number(current.targetAmount),
+        updatedAt: now,
+      },
+      $inc: { version: 1 },
+    },
+    { returnDocument: "after" },
+  );
+  await writeAudit(req, "contribute", "goal", current.id, current, {
+    goal,
+    contribution,
   });
-  await writeAudit(req, "contribute", "goal", current.id, current, result);
-  res.json({ ...serializeGoal(result.goal), contribution: result.contribution });
+  res.json({ ...serialize(goal), contribution: clean(contribution) });
 });
-
 router.get("/goals/:id/contributions", requireAuth, async (req, res) => {
-  const goalId = Number(req.params.id);
-  const rows = await db.select().from(goalContributionsTable)
-    .where(and(eq(goalContributionsTable.goalId, goalId), eq(goalContributionsTable.profileId, req.user!.userId)))
-    .orderBy(goalContributionsTable.createdAt);
-  res.json(rows.map(row => ({ ...row, amount: Number(row.amount) })));
+  const rows = await (
+    await getCollection(collections.goalContributions)
+  )
+    .find({ goalId: Number(req.params.id), profileId: req.user!.userId })
+    .sort({ createdAt: 1 })
+    .toArray();
+  res.json(rows.map((r: any) => ({ ...clean(r), amount: Number(r.amount) })));
 });
-
-router.post("/goals/:id/contributions/:contributionId/reverse", requireAuth, async (req, res) => {
-  const goalId = Number(req.params.id);
-  const contributionId = Number(req.params.contributionId);
-  const [contribution] = await db.select().from(goalContributionsTable).where(and(
-    eq(goalContributionsTable.id, contributionId), eq(goalContributionsTable.goalId, goalId),
-    eq(goalContributionsTable.profileId, req.user!.userId), eq(goalContributionsTable.isReversed, false),
-  )).limit(1);
-  const [goal] = await db.select().from(goalsTable).where(and(
-    eq(goalsTable.id, goalId), eq(goalsTable.profileId, req.user!.userId),
-  )).limit(1);
-  if (!contribution || !goal) { res.status(404).json({ error: "Contribution not found" }); return; }
-  const updated = await db.transaction(async tx => {
-    await tx.update(goalContributionsTable).set({ isReversed: true }).where(eq(goalContributionsTable.id, contributionId));
-    if (contribution.transactionId) {
-      await tx.update(transactionsTable).set({ status: "void", version: sql`${transactionsTable.version} + 1` })
-        .where(and(eq(transactionsTable.id, contribution.transactionId), eq(transactionsTable.profileId, req.user!.userId)));
+router.post(
+  "/goals/:id/contributions/:contributionId/reverse",
+  requireAuth,
+  async (req, res) => {
+    const profileId = req.user!.userId,
+      goalId = Number(req.params.id),
+      contributionId = Number(req.params.contributionId),
+      contributions = await getCollection(collections.goalContributions),
+      goals = await getCollection(collections.goals);
+    const contribution: any = await contributions.findOne({
+        id: contributionId,
+        goalId,
+        profileId,
+        isReversed: { $ne: true },
+      }),
+      goal: any = await goals.findOne(owned(goalId, profileId));
+    if (!contribution || !goal) {
+      res.status(404).json({ error: "Contribution not found" });
+      return;
     }
-    const amount = Math.max(0, Number(goal.currentAmount) - Number(contribution.amount));
-    const [next] = await tx.update(goalsTable).set({
-      currentAmount: String(amount), isCompleted: amount >= Number(goal.targetAmount),
-      version: sql`${goalsTable.version} + 1`,
-    }).where(eq(goalsTable.id, goalId)).returning();
-    return next;
-  });
-  await writeAudit(req, "reverse_contribution", "goal", goalId, contribution, updated);
-  res.json(serializeGoal(updated));
-});
-
+    await contributions.updateOne(
+      { id: contributionId },
+      { $set: { isReversed: true, updatedAt: new Date() } },
+    );
+    if (contribution.transactionId)
+      await (
+        await getCollection(collections.transactions)
+      ).updateOne(owned(contribution.transactionId, profileId), {
+        $set: { status: "void", updatedAt: new Date() },
+        $inc: { version: 1 },
+      });
+    const amount = Math.max(
+      0,
+      Number(goal.currentAmount) - Number(contribution.amount),
+    );
+    const updated: any = await goals.findOneAndUpdate(
+      owned(goalId, profileId),
+      {
+        $set: {
+          currentAmount: amount,
+          isCompleted: amount >= Number(goal.targetAmount),
+          updatedAt: new Date(),
+        },
+        $inc: { version: 1 },
+      },
+      { returnDocument: "after" },
+    );
+    await writeAudit(
+      req,
+      "reverse_contribution",
+      "goal",
+      goalId,
+      contribution,
+      updated,
+    );
+    res.json(serialize(updated));
+  },
+);
 export default router;

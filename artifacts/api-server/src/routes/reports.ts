@@ -1,109 +1,166 @@
-import { Router } from "express";
+import { Router, type Request } from "express";
 import PDFDocument from "pdfkit";
-import { and, asc, eq, gte, ilike, isNull, lte, sql } from "drizzle-orm";
-import { accountsTable, db, transactionsTable } from "@workspace/db";
+import { collections, getCollection, withoutMongoId } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth";
-
 const router = Router();
-
-function filters(req: Parameters<Parameters<typeof router.get>[1]>[0]) {
-  const conditions = [
-    eq(transactionsTable.profileId, req.user!.userId),
-    isNull(transactionsTable.deletedAt),
-    sql`${transactionsTable.status} <> 'void'`,
-  ];
-  if (req.query.dateFrom) conditions.push(gte(transactionsTable.date, String(req.query.dateFrom)));
-  if (req.query.dateTo) conditions.push(lte(transactionsTable.date, String(req.query.dateTo)));
-  if (req.query.accountId) conditions.push(eq(transactionsTable.accountId, Number(req.query.accountId)));
-  if (req.query.category) conditions.push(eq(transactionsTable.category, String(req.query.category)));
-  if (req.query.tag) conditions.push(ilike(transactionsTable.tags, `%${String(req.query.tag)}%`));
-  return and(...conditions);
+function filter(req: Request) {
+  const f: any = {
+    profileId: req.user!.userId,
+    deletedAt: null,
+    status: { $ne: "void" },
+  };
+  if (req.query.dateFrom || req.query.dateTo)
+    f.date = {
+      ...(req.query.dateFrom ? { $gte: String(req.query.dateFrom) } : {}),
+      ...(req.query.dateTo ? { $lte: String(req.query.dateTo) } : {}),
+    };
+  if (req.query.accountId) f.accountId = Number(req.query.accountId);
+  if (req.query.category) f.category = String(req.query.category);
+  if (req.query.tag) f.tags = { $regex: String(req.query.tag), $options: "i" };
+  return f;
 }
-
+async function data(req: Request) {
+  const txs: any[] = await (
+      await getCollection(collections.transactions)
+    )
+      .find(filter(req))
+      .sort({ date: 1, id: 1 })
+      .toArray(),
+    accounts: any[] = await (
+      await getCollection(collections.accounts)
+    )
+      .find({ profileId: req.user!.userId })
+      .toArray(),
+    names = new Map(accounts.map((a) => [a.id, a.name]));
+  return { txs, accounts, names };
+}
 router.get("/reports/summary", requireAuth, async (req, res) => {
-  const where = filters(req);
-  const [totals, categories, accounts] = await Promise.all([
-    db.select({
-      income: sql<string>`coalesce(sum(case when ${transactionsTable.type}='income' then ${transactionsTable.amount} else 0 end),0)`,
-      expense: sql<string>`coalesce(sum(case when ${transactionsTable.type}='expense' then ${transactionsTable.amount} else 0 end),0)`,
-      taxDeductible: sql<string>`coalesce(sum(case when ${transactionsTable.taxDeductible} then ${transactionsTable.amount} else 0 end),0)`,
-      count: sql<number>`count(*)::int`,
-    }).from(transactionsTable).where(where),
-    db.select({ category: transactionsTable.category, amount: sql<string>`sum(${transactionsTable.amount})` })
-      .from(transactionsTable).where(and(where, eq(transactionsTable.type, "expense")))
-      .groupBy(transactionsTable.category).orderBy(sql`sum(${transactionsTable.amount}) desc`),
-    db.select({
-      id: accountsTable.id, name: accountsTable.name, opening: accountsTable.openingBalance,
-      movement: sql<string>`coalesce(sum(case when ${transactionsTable.direction}='credit' then ${transactionsTable.amount} else -${transactionsTable.amount} end),0)`,
-    }).from(accountsTable).leftJoin(transactionsTable, and(
-      eq(transactionsTable.accountId, accountsTable.id), isNull(transactionsTable.deletedAt),
-      sql`${transactionsTable.status} in ('cleared','reconciled')`,
-    )).where(and(eq(accountsTable.profileId, req.user!.userId), eq(accountsTable.includeInNetWorth, true)))
-      .groupBy(accountsTable.id),
-  ]);
-  const income = Number(totals[0]?.income ?? 0);
-  const expense = Number(totals[0]?.expense ?? 0);
+  const { txs, accounts } = await data(req),
+    income = txs
+      .filter((t) => t.type === "income")
+      .reduce((s, t) => s + Number(t.amount), 0),
+    expense = txs
+      .filter((t) => t.type === "expense")
+      .reduce((s, t) => s + Number(t.amount), 0),
+    cats = new Map<string, number>();
+  for (const t of txs.filter((t) => t.type === "expense"))
+    cats.set(
+      t.category || "Uncategorized",
+      (cats.get(t.category || "Uncategorized") || 0) + Number(t.amount),
+    );
+  const all: any[] = await (
+      await getCollection(collections.transactions)
+    )
+      .find({
+        profileId: req.user!.userId,
+        deletedAt: null,
+        status: { $in: ["cleared", "reconciled"] },
+      })
+      .toArray(),
+    balances = accounts
+      .filter((a) => a.includeInNetWorth !== false)
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        balance:
+          Number(a.openingBalance || 0) +
+          all
+            .filter((t) => t.accountId === a.id)
+            .reduce(
+              (s, t) =>
+                s + (t.direction === "credit" ? 1 : -1) * Number(t.amount),
+              0,
+            ),
+      }));
   res.json({
-    income, expense, savings: income - expense, transactionCount: totals[0]?.count ?? 0,
-    taxDeductible: Number(totals[0]?.taxDeductible ?? 0),
-    categories: categories.map(row => ({ category: row.category ?? "Uncategorized", amount: Number(row.amount) })),
-    accounts: accounts.map(row => ({ id: row.id, name: row.name, balance: Number(row.opening) + Number(row.movement) })),
-    netWorth: accounts.reduce((sum, row) => sum + Number(row.opening) + Number(row.movement), 0),
+    income,
+    expense,
+    savings: income - expense,
+    transactionCount: txs.length,
+    taxDeductible: txs
+      .filter((t) => t.taxDeductible)
+      .reduce((s, t) => s + Number(t.amount), 0),
+    categories: [...cats]
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount),
+    accounts: balances,
+    netWorth: balances.reduce((s, a) => s + a.balance, 0),
   });
 });
-
 router.get("/reports/export.csv", requireAuth, async (req, res) => {
+  const { txs, names } = await data(req),
+    escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   res.setHeader("Content-Type", "text/csv; charset=utf-8");
-  res.setHeader("Content-Disposition", `attachment; filename="finance-intelli-${new Date().toISOString().slice(0, 10)}.csv"`);
-  res.write("\uFEFFDate,Account,Type,Status,Amount,Category,Merchant,Description,Payment Method,Tags,Notes\n");
-  const where = filters(req);
-  const batchSize = 500;
-  let offset = 0;
-  const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-  while (true) {
-    const rows = await db.select({
-      transaction: transactionsTable,
-      accountName: accountsTable.name,
-    }).from(transactionsTable).innerJoin(accountsTable, eq(accountsTable.id, transactionsTable.accountId))
-      .where(where).orderBy(asc(transactionsTable.date), asc(transactionsTable.id)).limit(batchSize).offset(offset);
-    for (const { transaction: tx, accountName } of rows) {
-      res.write([
-        tx.date, accountName, tx.type, tx.status, tx.amount, tx.category, tx.merchant,
-        tx.description, tx.paymentMethod, tx.tags, tx.notes,
-      ].map(escape).join(",") + "\n");
-    }
-    if (rows.length < batchSize) break;
-    offset += batchSize;
-  }
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="finance-intelli-${new Date().toISOString().slice(0, 10)}.csv"`,
+  );
+  res.write(
+    "\uFEFFDate,Account,Type,Status,Amount,Category,Merchant,Description,Payment Method,Tags,Notes\n",
+  );
+  for (const t of txs)
+    res.write(
+      [
+        t.date,
+        names.get(t.accountId),
+        t.type,
+        t.status,
+        t.amount,
+        t.category,
+        t.merchant,
+        t.description,
+        t.paymentMethod,
+        t.tags,
+        t.notes,
+      ]
+        .map(escape)
+        .join(",") + "\n",
+    );
   res.end();
 });
-
 router.get("/reports/statement.pdf", requireAuth, async (req, res) => {
-  const rows = await db.select({ transaction: transactionsTable, accountName: accountsTable.name })
-    .from(transactionsTable).innerJoin(accountsTable, eq(accountsTable.id, transactionsTable.accountId))
-    .where(filters(req)).orderBy(asc(transactionsTable.date), asc(transactionsTable.id)).limit(5000);
+  const { txs, names } = await data(req);
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", 'attachment; filename="finance-intelli-statement.pdf"');
-  const document = new PDFDocument({ margin: 48, size: "A4" });
-  document.pipe(res);
-  document.fontSize(20).text("Finance Intelli Statement");
-  document.fontSize(9).fillColor("#667085").text(`Generated ${new Date().toLocaleString("en-IN")} · ${rows.length} entries`);
-  document.moveDown();
+  res.setHeader(
+    "Content-Disposition",
+    'attachment; filename="finance-intelli-statement.pdf"',
+  );
+  const doc = new PDFDocument({ margin: 48, size: "A4" });
+  doc.pipe(res);
+  doc.fontSize(20).text("Finance Intelli Statement");
+  doc
+    .fontSize(9)
+    .fillColor("#667085")
+    .text(
+      `Generated ${new Date().toLocaleString("en-IN")} · ${txs.length} entries`,
+    )
+    .moveDown();
   let total = 0;
-  for (const { transaction: tx, accountName } of rows) {
-    const signed = tx.direction === "credit" ? Number(tx.amount) : -Number(tx.amount);
+  for (const t of txs.slice(0, 5000)) {
+    const signed = (t.direction === "credit" ? 1 : -1) * Number(t.amount);
     total += signed;
-    if (document.y > 760) document.addPage();
-    document.fillColor("#111827").fontSize(9).text(
-      `${tx.date}  ${accountName}  ${tx.description ?? tx.category ?? tx.type}`,
-      { continued: true, width: 420 },
-    ).fillColor(signed >= 0 ? "#047857" : "#b42318").text(
-      `${signed >= 0 ? "+" : "-"}₹${Math.abs(signed).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+    if (doc.y > 760) doc.addPage();
+    doc
+      .fillColor("#111827")
+      .fontSize(9)
+      .text(
+        `${t.date}  ${names.get(t.accountId) || "Account"}  ${t.description || t.category || t.type}`,
+        { continued: true, width: 420 },
+      )
+      .fillColor(signed >= 0 ? "#047857" : "#b42318")
+      .text(
+        `${signed >= 0 ? "+" : "-"}₹${Math.abs(signed).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
+        { align: "right" },
+      );
+  }
+  doc
+    .moveDown()
+    .fillColor("#111827")
+    .fontSize(12)
+    .text(
+      `Net movement: ₹${total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`,
       { align: "right" },
     );
-  }
-  document.moveDown().fillColor("#111827").fontSize(12).text(`Net movement: ₹${total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`, { align: "right" });
-  document.end();
+  doc.end();
 });
-
 export default router;

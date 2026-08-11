@@ -1,172 +1,20 @@
 import { Router } from "express";
-import { db, transactionsTable, budgetsTable } from "@workspace/db";
-import { eq, and, gte, lte, sql } from "drizzle-orm";
+import { collections, getCollection } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth";
-
 const router = Router();
-
-router.get("/insights", requireAuth, async (req, res): Promise<void> => {
-  const userId = req.user!.userId;
-  const now = new Date();
-  const thisMonthFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-  const thisMonthTo = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()}`;
-
-  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const lastMonthFrom = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}-01`;
-  const lastMonthTo = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}-${new Date(lastMonth.getFullYear(), lastMonth.getMonth() + 1, 0).getDate()}`;
-
-  const [thisMonthExpenses, lastMonthExpenses, budgets, categorySpend] = await Promise.all([
-    db.select({ total: sql<string>`coalesce(sum(amount), 0)` }).from(transactionsTable)
-      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"), gte(transactionsTable.date, thisMonthFrom), lte(transactionsTable.date, thisMonthTo))),
-    db.select({ total: sql<string>`coalesce(sum(amount), 0)` }).from(transactionsTable)
-      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"), gte(transactionsTable.date, lastMonthFrom), lte(transactionsTable.date, lastMonthTo))),
-    db.select().from(budgetsTable).where(eq(budgetsTable.profileId, userId)),
-    db.select({
-      category: transactionsTable.category,
-      thisMonth: sql<string>`coalesce(sum(case when ${transactionsTable.date} >= ${thisMonthFrom} and ${transactionsTable.date} <= ${thisMonthTo} then ${transactionsTable.amount} else 0 end), 0)`,
-      lastMonth: sql<string>`coalesce(sum(case when ${transactionsTable.date} >= ${lastMonthFrom} and ${transactionsTable.date} <= ${lastMonthTo} then ${transactionsTable.amount} else 0 end), 0)`,
-    }).from(transactionsTable)
-      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"), gte(transactionsTable.date, lastMonthFrom)))
-      .groupBy(transactionsTable.category),
-  ]);
-
-  const thisMonth = parseFloat(thisMonthExpenses[0]?.total ?? "0");
-  const lastMonth2 = parseFloat(lastMonthExpenses[0]?.total ?? "0");
-  const insights = [];
-
-  // Spending increase vs last month
-  if (lastMonth2 > 0 && thisMonth > lastMonth2 * 1.2) {
-    const increase = Math.round(((thisMonth - lastMonth2) / lastMonth2) * 100);
-    insights.push({
-      id: "spending-increase",
-      type: "warning",
-      title: "Spending Up This Month",
-      description: `Your expenses this month are ${increase}% higher than last month. Consider reviewing discretionary spending.`,
-      severity: increase > 50 ? "high" : "medium",
-      category: null,
-      amount: thisMonth - lastMonth2,
-      trend: `+${increase}%`,
-    });
-  }
-
-  // Budget overruns
-  const spendByCategory = new Map(categorySpend.map(row => [row.category, Number(row.thisMonth)]));
-  for (const budget of budgets) {
-    if (budget.period !== "monthly") continue;
-    const spent = budget.category ? (spendByCategory.get(budget.category) ?? 0) : thisMonth;
-    const budgetAmt = parseFloat(budget.amount);
-    if (spent > budgetAmt) {
-      insights.push({
-        id: `budget-exceeded-${budget.id}`,
-        type: "warning",
-        title: `Budget Exceeded: ${budget.name}`,
-        description: `You have exceeded your ${budget.name} budget by ₹${Math.round(spent - budgetAmt).toLocaleString("en-IN")}. Time to cut back.`,
-        severity: "high",
-        category: budget.category,
-        amount: spent - budgetAmt,
-        trend: null,
-      });
-    } else if (spent > budgetAmt * 0.8) {
-      const threshold = Math.round((spent / budgetAmt) * 100);
-      insights.push({
-        id: `budget-warning-${budget.id}`,
-        type: "warning",
-        title: `Approaching Budget Limit: ${budget.name}`,
-        description: `You've used ${threshold}% of your ${budget.name} budget. Slow down to stay within limits.`,
-        severity: "medium",
-        category: budget.category,
-        amount: null,
-        trend: `${threshold}% used`,
-      });
-    }
-  }
-
-  // Category spike detection
-  for (const cat of categorySpend) {
-    const thisM = parseFloat(cat.thisMonth);
-    const lastM = parseFloat(cat.lastMonth);
-    if (lastM > 0 && thisM > lastM * 1.5 && thisM > 500) {
-      const spike = Math.round(((thisM - lastM) / lastM) * 100);
-      insights.push({
-        id: `category-spike-${cat.category ?? "misc"}`,
-        type: "warning",
-        title: `${cat.category ?? "Miscellaneous"} Spending Spike`,
-        description: `Your spending on ${cat.category ?? "miscellaneous"} jumped ${spike}% compared to last month.`,
-        severity: spike > 100 ? "high" : "medium",
-        category: cat.category,
-        amount: thisM - lastM,
-        trend: `+${spike}%`,
-      });
-    }
-  }
-
-  // Savings tip if savings rate is low
-  if (thisMonth > 0 && lastMonth2 > 0) {
-    const thisMonthIncome = parseFloat((await db.select({ total: sql<string>`coalesce(sum(amount), 0)` })
-      .from(transactionsTable)
-      .where(and(eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "income"), gte(transactionsTable.date, thisMonthFrom), lte(transactionsTable.date, thisMonthTo))))[0]?.total ?? "0");
-
-    const savingsRate = thisMonthIncome > 0 ? (thisMonthIncome - thisMonth) / thisMonthIncome : 0;
-    if (savingsRate < 0.1 && thisMonthIncome > 0) {
-      insights.push({
-        id: "low-savings-rate",
-        type: "warning",
-        title: "Low Savings Rate",
-        description: `You're saving less than 10% of your income this month. Aim for at least 20% to build a strong financial cushion.`,
-        severity: "high",
-        category: null,
-        amount: null,
-        trend: `${Math.round(savingsRate * 100)}% saved`,
-      });
-    } else if (savingsRate >= 0.3) {
-      insights.push({
-        id: "great-savings",
-        type: "success",
-        title: "Excellent Savings Rate",
-        description: `You're saving ${Math.round(savingsRate * 100)}% of your income this month. Keep up the great work!`,
-        severity: "low",
-        category: null,
-        amount: null,
-        trend: `${Math.round(savingsRate * 100)}% saved`,
-      });
-    }
-  }
-
-  // No transactions yet — provide tip
-  if (insights.length === 0) {
-    insights.push({
-      id: "getting-started",
-      type: "info",
-      title: "Start Tracking to Get Insights",
-      description: "Add your income and expenses to unlock personalized AI insights about your spending patterns, savings rate, and budget health.",
-      severity: "low",
-      category: null,
-      amount: null,
-      trend: null,
-    });
-    insights.push({
-      id: "budget-tip",
-      type: "tip",
-      title: "Set Up Budgets",
-      description: "Create category-level budgets to automatically track your spending limits and receive alerts when you're close to exceeding them.",
-      severity: "low",
-      category: null,
-      amount: null,
-      trend: null,
-    });
-    insights.push({
-      id: "goal-tip",
-      type: "tip",
-      title: "Set a Savings Goal",
-      description: "Whether it's an emergency fund, a vacation, or a major purchase — setting a goal gives your savings a purpose and keeps you motivated.",
-      severity: "low",
-      category: null,
-      amount: null,
-      trend: null,
-    });
-  }
-
+router.get("/insights", requireAuth, async (req, res) => {
+  const now = new Date(), month = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+  const current = month(now), previous = month(new Date(now.getFullYear(), now.getMonth() - 1, 1));
+  const txs: any[] = await (await getCollection(collections.transactions)).find({ profileId: req.user!.userId, deletedAt: null, status: { $ne: "void" }, date: { $gte: `${previous}-01` } }).toArray();
+  const expense = (m: string) => txs.filter(t => t.type === "expense" && String(t.date).startsWith(m)).reduce((s, t) => s + Number(t.amount), 0);
+  const thisExpense = expense(current), lastExpense = expense(previous), insights: any[] = [];
+  if (lastExpense > 0 && thisExpense > lastExpense * 1.2) { const increase = Math.round((thisExpense - lastExpense) / lastExpense * 100); insights.push({ id: "spending-increase", type: "warning", title: "Spending Up This Month", description: `Your expenses this month are ${increase}% higher than last month.`, severity: increase > 50 ? "high" : "medium", category: null, amount: thisExpense - lastExpense, trend: `+${increase}%` }); }
+  const spend = new Map<string, number>(); for (const t of txs.filter(t => t.type === "expense" && String(t.date).startsWith(current))) spend.set(t.category || "Uncategorized", (spend.get(t.category || "Uncategorized") || 0) + Number(t.amount));
+  const budgets: any[] = await (await getCollection(collections.budgets)).find({ profileId: req.user!.userId }).toArray();
+  for (const b of budgets.filter(b => b.period === "monthly")) { const used = b.category ? spend.get(b.category) || 0 : thisExpense, limit = Number(b.limitAmount ?? b.amount ?? 0), pct = limit ? Math.round(used / limit * 100) : 0; if (pct >= 80) insights.push({ id: `budget-${b.id}`, type: "warning", title: pct > 100 ? `Budget Exceeded: ${b.name}` : `Approaching Budget Limit: ${b.name}`, description: pct > 100 ? `You have exceeded this budget by ₹${Math.round(used-limit).toLocaleString("en-IN")}.` : `You've used ${pct}% of this budget.`, severity: pct > 100 ? "high" : "medium", category: b.category ?? null, amount: pct > 100 ? used-limit : null, trend: `${pct}% used` }); }
+  const income = txs.filter(t => t.type === "income" && String(t.date).startsWith(current)).reduce((s,t) => s + Number(t.amount), 0), rate = income > 0 ? (income-thisExpense)/income : 0;
+  if (income > 0 && rate < .1) insights.push({ id: "low-savings-rate", type: "warning", title: "Low Savings Rate", description: "You're saving less than 10% of your income this month.", severity: "high", category: null, amount: null, trend: `${Math.round(rate*100)}% saved` });
+  if (!insights.length) insights.push({ id: "getting-started", type: "info", title: "Your Finances Look Steady", description: "Keep tracking transactions to unlock more personalized spending and budget insights.", severity: "low", category: null, amount: null, trend: null });
   res.json(insights);
 });
-
 export default router;

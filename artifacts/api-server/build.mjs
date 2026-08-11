@@ -16,8 +16,8 @@ async function buildAll() {
 
   await esbuild({
     entryPoints: {
-      index: path.resolve(artifactDir, "src/index.ts"),
-      app: path.resolve(artifactDir, "src/app.ts"),
+    index: path.resolve(artifactDir, "src/index.ts"),
+    app: path.resolve(artifactDir, "src/app.ts"),
     },
     platform: "node",
     bundle: true,
@@ -49,7 +49,6 @@ async function buildAll() {
       "dtrace-provider",
       "isolated-vm",
       "lightningcss",
-      "pg-native",
       "oracledb",
       "mongodb-client-encryption",
       "nodemailer",
@@ -62,7 +61,6 @@ async function buildAll() {
       "@prisma/client",
       "@mikro-orm/*",
       "@grpc/*",
-      "@swc/*",
       "@aws-sdk/*",
       "@azure/*",
       "@opentelemetry/*",

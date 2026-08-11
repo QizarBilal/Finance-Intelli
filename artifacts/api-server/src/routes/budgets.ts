@@ -1,153 +1,207 @@
 import { Router } from "express";
-import { db, budgetsTable, transactionsTable, profileTable } from "@workspace/db";
-import { eq, and, gte, lte, sql, isNull } from "drizzle-orm";
+import {
+  collections,
+  getCollection,
+  nextId,
+  withoutMongoId,
+  withoutMongoIds,
+} from "@workspace/db";
 import { requireAuth } from "../middlewares/auth";
 import {
-  CreateBudgetBody, UpdateBudgetBody,
-  GetBudgetParams, UpdateBudgetParams, DeleteBudgetParams,
+  CreateBudgetBody,
+  UpdateBudgetBody,
+  GetBudgetParams,
+  UpdateBudgetParams,
+  DeleteBudgetParams,
 } from "@workspace/api-zod";
 import { periodRange } from "../lib/dates";
-
-const router = Router();
-
-function budgetRange(budget: typeof budgetsTable.$inferSelect, timezone = "UTC", weekStarts: "monday" | "sunday" = "monday") {
-  let dateFrom: string, dateTo: string;
-
-  if (budget.period === "custom" && budget.startDate && budget.endDate) {
-    dateFrom = budget.startDate; dateTo = budget.endDate;
-  } else if (budget.period === "daily") {
-    ({ from: dateFrom, to: dateTo } = periodRange("today", timezone, weekStarts));
-  } else if (budget.period === "weekly") {
-    ({ from: dateFrom, to: dateTo } = periodRange("weekly", timezone, weekStarts));
-  } else if (budget.period === "yearly") {
-    ({ from: dateFrom, to: dateTo } = periodRange("yearly", timezone, weekStarts));
-  } else {
-    ({ from: dateFrom, to: dateTo } = periodRange("monthly", timezone, weekStarts));
+const router = Router(),
+  active = { $in: [null, undefined] };
+function range(b: any, tz = "UTC", ws: "monday" | "sunday" = "monday") {
+  if (b.period === "custom" && b.startDate && b.endDate)
+    return { dateFrom: b.startDate, dateTo: b.endDate };
+  const p =
+    b.period === "daily"
+      ? "today"
+      : b.period === "weekly"
+        ? "weekly"
+        : b.period === "yearly"
+          ? "yearly"
+          : "monthly";
+  const r = periodRange(p, tz, ws);
+  return { dateFrom: r.from, dateTo: r.to };
+}
+async function spent(
+  b: any,
+  userId: number,
+  tz = "UTC",
+  ws: "monday" | "sunday" = "monday",
+) {
+  const r = range(b, tz, ws),
+    t = await getCollection(collections.transactions),
+    f: any = {
+      profileId: userId,
+      type: "expense",
+      date: { $gte: r.dateFrom, $lte: r.dateTo },
+      deletedAt: active,
+      status: { $ne: "void" },
+    };
+  if (b.category)
+    f.category = {
+      $regex: `^${String(b.category)
+        .trim()
+        .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
+      $options: "i",
+    };
+  const x = await t
+    .aggregate<any>([
+      { $match: f },
+      { $group: { _id: null, total: { $sum: "$amount" } } },
+    ])
+    .toArray();
+  return Number(x[0]?.total ?? 0);
+}
+const ser = (b: any, s: number) => ({
+  ...b,
+  _id: undefined,
+  amount: Number(b.limitAmount ?? b.amount ?? 0),
+  limitAmount: Number(b.limitAmount ?? b.amount ?? 0),
+  spent: s,
+  alertThreshold: b.alertThreshold == null ? null : Number(b.alertThreshold),
+  createdAt: new Date(b.createdAt).toISOString(),
+});
+router.get("/budgets", requireAuth, async (req, res) => {
+  const userId = req.user!.userId,
+    b = await getCollection(collections.budgets),
+    p = await getCollection(collections.profiles),
+    t = await getCollection(collections.transactions),
+    profile: any = await p.findOne({ id: userId }),
+    budgets: any[] = withoutMongoIds(
+      await b
+        .find({ profileId: userId, archivedAt: active })
+        .sort({ createdAt: 1 })
+        .toArray(),
+    );
+  const tz = profile?.timezone ?? "UTC",
+    ws = profile?.weekStarts === "sunday" ? "sunday" : "monday";
+  const txs = await t
+    .find({
+      profileId: userId,
+      type: "expense",
+      deletedAt: active,
+      status: { $ne: "void" },
+    })
+    .project({ category: 1 })
+    .toArray();
+  const out = [];
+  for (const budget of budgets) {
+    const inferred =
+        budget.category ??
+        txs.find(
+          (x) =>
+            (x.category ?? "").trim().toLowerCase() ===
+            budget.name.trim().toLowerCase(),
+        )?.category ??
+        null,
+      effective = { ...budget, category: inferred };
+    out.push(ser(effective, await spent(effective, userId, tz, ws)));
   }
-  return { dateFrom, dateTo };
-}
-
-async function computeSpent(budget: typeof budgetsTable.$inferSelect, userId: number, timezone = "UTC", weekStarts: "monday" | "sunday" = "monday"): Promise<number> {
-  const { dateFrom, dateTo } = budgetRange(budget, timezone, weekStarts);
-  const conditions: any[] = [
-    eq(transactionsTable.profileId, userId),
-    eq(transactionsTable.type, "expense"),
-    gte(transactionsTable.date, dateFrom),
-    lte(transactionsTable.date, dateTo),
-    isNull(transactionsTable.deletedAt),
-    sql`${transactionsTable.status} <> 'void'`,
-  ];
-  if (budget.category) conditions.push(sql`lower(trim(coalesce(${transactionsTable.category}, ''))) = lower(trim(${budget.category}))`);
-
-  const [{ total }] = await db.select({ total: sql<string>`coalesce(sum(amount), 0)` })
-    .from(transactionsTable).where(and(...conditions));
-  return parseFloat(total ?? "0");
-}
-
-function serializeBudget(b: typeof budgetsTable.$inferSelect, spent: number) {
-  return {
-    id: b.id, name: b.name, amount: parseFloat(b.amount), spent,
-    period: b.period, category: b.category, color: b.color,
-    startDate: b.startDate, endDate: b.endDate,
-    alertThreshold: b.alertThreshold != null ? parseFloat(b.alertThreshold) : null,
-    createdAt: b.createdAt.toISOString(),
-  };
-}
-
-router.get("/budgets", requireAuth, async (req, res): Promise<void> => {
-  const userId = req.user!.userId;
-  const [profile, budgets] = await Promise.all([
-    db.select({ timezone: profileTable.timezone, weekStarts: profileTable.weekStarts }).from(profileTable).where(eq(profileTable.id, userId)).limit(1),
-    db.select().from(budgetsTable).where(and(eq(budgetsTable.profileId, userId), isNull(budgetsTable.archivedAt))).orderBy(budgetsTable.createdAt),
-  ]);
-  if (budgets.length === 0) { res.json([]); return; }
-  const timezone = profile[0]?.timezone ?? "UTC";
-  const weekStarts = profile[0]?.weekStarts === "sunday" ? "sunday" : "monday";
-  const ranges = budgets.map(budget => budgetRange(budget, timezone, weekStarts));
-  const minDate = ranges.reduce((min, range) => range.dateFrom < min ? range.dateFrom : min, ranges[0].dateFrom);
-  const maxDate = ranges.reduce((max, range) => range.dateTo > max ? range.dateTo : max, ranges[0].dateTo);
-  const spendRows = await db.select({
-    date: transactionsTable.date, category: transactionsTable.category,
-    amount: sql<string>`sum(${transactionsTable.amount})`,
-  }).from(transactionsTable).where(and(
-    eq(transactionsTable.profileId, userId), eq(transactionsTable.type, "expense"),
-    gte(transactionsTable.date, minDate), lte(transactionsTable.date, maxDate),
-    isNull(transactionsTable.deletedAt), sql`${transactionsTable.status} <> 'void'`,
-  )).groupBy(transactionsTable.date, transactionsTable.category);
-  const results = budgets.map((budget, index) => {
-    const range = ranges[index];
-    // Older UI versions did not expose a category field, so category budgets
-    // were commonly saved with only a matching name (for example "Snack").
-    // Infer that link at read time to preserve the stored records unchanged.
-    const inferredCategory = budget.category ?? spendRows.find(row =>
-      (row.category ?? '').trim().toLocaleLowerCase() === budget.name.trim().toLocaleLowerCase())?.category ?? null;
-    const effectiveBudget = { ...budget, category: inferredCategory };
-    const spent = spendRows.reduce((sum, row) => row.date >= range.dateFrom && row.date <= range.dateTo &&
-      (!inferredCategory || inferredCategory.trim().toLocaleLowerCase() === (row.category ?? '').trim().toLocaleLowerCase()) ? sum + Number(row.amount) : sum, 0);
-    return serializeBudget(effectiveBudget, spent);
-  });
-  res.json(results);
+  res.json(out);
 });
-
-router.post("/budgets", requireAuth, async (req, res): Promise<void> => {
-  const parsed = CreateBudgetBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-
-  const userId = req.user!.userId;
-  const data = parsed.data;
-  const [budget] = await db.insert(budgetsTable).values({
-    profileId: userId,
-    name: data.name, amount: String(data.amount), period: data.period,
-    category: data.category ?? null, color: data.color ?? null,
-    startDate: data.startDate ?? null, endDate: data.endDate ?? null,
-    alertThreshold: data.alertThreshold != null ? String(data.alertThreshold) : null,
-  }).returning();
-  res.status(201).json(serializeBudget(budget, await computeSpent(budget, userId)));
+router.post("/budgets", requireAuth, async (req, res) => {
+  const p = CreateBudgetBody.safeParse(req.body);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  const c = await getCollection(collections.budgets),
+    now = new Date(),
+    b: any = {
+      id: await nextId(collections.budgets),
+      profileId: req.user!.userId,
+      ...p.data,
+      amount: Number(p.data.amount),
+      limitAmount: Number(p.data.amount),
+      category: p.data.category ?? null,
+      color: p.data.color ?? null,
+      startDate: p.data.startDate ?? null,
+      endDate: p.data.endDate ?? null,
+      alertThreshold:
+        p.data.alertThreshold == null ? null : Number(p.data.alertThreshold),
+      archivedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+  await c.insertOne(b);
+  res.status(201).json(ser(b, await spent(b, req.user!.userId)));
 });
-
-router.get("/budgets/:id", requireAuth, async (req, res): Promise<void> => {
-  const params = GetBudgetParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-
-  const userId = req.user!.userId;
-  const [budget] = await db.select().from(budgetsTable)
-    .where(and(eq(budgetsTable.id, params.data.id), eq(budgetsTable.profileId, userId)));
-  if (!budget) { res.status(404).json({ error: "Budget not found" }); return; }
-  res.json(serializeBudget(budget, await computeSpent(budget, userId)));
+router.get("/budgets/:id", requireAuth, async (req, res) => {
+  const p = GetBudgetParams.safeParse(req.params);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  const c = await getCollection(collections.budgets),
+    b: any = withoutMongoId(
+      await c.findOne({ id: p.data.id, profileId: req.user!.userId }),
+    );
+  if (!b) {
+    res.status(404).json({ error: "Budget not found" });
+    return;
+  }
+  res.json(ser(b, await spent(b, req.user!.userId)));
 });
-
-router.patch("/budgets/:id", requireAuth, async (req, res): Promise<void> => {
-  const params = UpdateBudgetParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-  const parsed = UpdateBudgetBody.safeParse(req.body);
-  if (!parsed.success) { res.status(400).json({ error: parsed.error.message }); return; }
-
-  const userId = req.user!.userId;
-  const data = parsed.data;
-  const updates: Record<string, unknown> = {};
-  if (data.name != null) updates.name = data.name;
-  if (data.amount != null) updates.amount = String(data.amount);
-  if (data.period != null) updates.period = data.period;
-  if (data.category != null) updates.category = data.category;
-  if (data.color != null) updates.color = data.color;
-  if (data.startDate != null) updates.startDate = data.startDate;
-  if (data.endDate != null) updates.endDate = data.endDate;
-  if (data.alertThreshold != null) updates.alertThreshold = String(data.alertThreshold);
-
-  const [budget] = await db.update(budgetsTable).set(updates)
-    .where(and(eq(budgetsTable.id, params.data.id), eq(budgetsTable.profileId, userId))).returning();
-  if (!budget) { res.status(404).json({ error: "Budget not found" }); return; }
-  res.json(serializeBudget(budget, await computeSpent(budget, userId)));
+router.patch("/budgets/:id", requireAuth, async (req, res) => {
+  const q = UpdateBudgetParams.safeParse(req.params),
+    p = UpdateBudgetBody.safeParse(req.body);
+  if (!q.success || !p.success) {
+    res
+      .status(400)
+      .json({ error: q.success ? p.error?.message : q.error.message });
+    return;
+  }
+  const u: any = { updatedAt: new Date() };
+  for (const k of [
+    "name",
+    "period",
+    "category",
+    "color",
+    "startDate",
+    "endDate",
+  ] as const)
+    if (p.data[k] != null) u[k] = p.data[k];
+  if (p.data.amount != null) {
+    u.amount = Number(p.data.amount);
+    u.limitAmount = Number(p.data.amount);
+  }
+  if (p.data.alertThreshold != null)
+    u.alertThreshold = Number(p.data.alertThreshold);
+  const c = await getCollection(collections.budgets),
+    b: any = withoutMongoId(
+      await c.findOneAndUpdate(
+        { id: q.data.id, profileId: req.user!.userId },
+        { $set: u },
+        { returnDocument: "after" },
+      ),
+    );
+  if (!b) {
+    res.status(404).json({ error: "Budget not found" });
+    return;
+  }
+  res.json(ser(b, await spent(b, req.user!.userId)));
 });
-
-router.delete("/budgets/:id", requireAuth, async (req, res): Promise<void> => {
-  const params = DeleteBudgetParams.safeParse(req.params);
-  if (!params.success) { res.status(400).json({ error: params.error.message }); return; }
-
-  const [deleted] = await db.delete(budgetsTable)
-    .where(and(eq(budgetsTable.id, params.data.id), eq(budgetsTable.profileId, req.user!.userId))).returning();
-  if (!deleted) { res.status(404).json({ error: "Budget not found" }); return; }
+router.delete("/budgets/:id", requireAuth, async (req, res) => {
+  const p = DeleteBudgetParams.safeParse(req.params);
+  if (!p.success) {
+    res.status(400).json({ error: p.error.message });
+    return;
+  }
+  const c = await getCollection(collections.budgets),
+    x = await c.deleteOne({ id: p.data.id, profileId: req.user!.userId });
+  if (!x.deletedCount) {
+    res.status(404).json({ error: "Budget not found" });
+    return;
+  }
   res.sendStatus(204);
 });
-
 export default router;

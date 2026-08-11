@@ -107,7 +107,7 @@ flowchart LR
     C --> D["Express API"]
     D --> E["Authentication + validation"]
     E --> F["Ledger service"]
-    F --> G[("PostgreSQL / Drizzle")]
+    F --> G[("MongoDB Atlas")]
     G --> H["Financial aggregations"]
     H --> I["Dashboard • Budgets • Analytics"]
 
@@ -160,7 +160,7 @@ Finance-Intelli/
 │   ├── api-client-react/             # Generated TanStack Query client
 │   ├── api-spec/                     # OpenAPI source of truth
 │   ├── api-zod/                      # Generated runtime validation schemas
-│   └── db/                           # Drizzle schema and migrations
+│   └── db/                           # MongoDB Atlas connection and collection utilities
 ├── scripts/                          # Workspace and migration utilities
 ├── docs/readme/                      # README artwork and product screenshots
 ├── pnpm-workspace.yaml               # Monorepo package map
@@ -174,11 +174,11 @@ Finance-Intelli/
 | Experience | React 19, Vite, Wouter, Tailwind CSS, shadcn/ui | Responsive application shell and feature pages |
 | Motion & data | Framer Motion, Recharts, TanStack Query | Interaction, visualization, caching, invalidation |
 | API | Express 5, Zod/OpenAPI-generated contracts | Authenticated endpoints and input validation |
-| Persistence | Drizzle ORM, PostgreSQL | Profile-scoped ledger and financial records |
+| Persistence | MongoDB Atlas | Profile-scoped ledger and financial records |
 | Security | JWT sessions, secure cookies, Helmet, CORS, rate limiting | Session integrity and production hardening |
 | Delivery | pnpm workspaces, TypeScript, Vercel | Reproducible builds and serverless deployment |
 
-> **MongoDB Atlas note:** Atlas variables and migration guidance are included for the planned repository migration. The active ledger implementation in this codebase currently uses PostgreSQL through Drizzle; switching databases requires a reconciled data migration, not only an environment-variable change.
+> **MongoDB Atlas:** The API uses pooled MongoDB connections and preserves the existing `finance_intelli` collections without deployment-time data migrations.
 
 ## ▶ Local development
 
@@ -186,7 +186,7 @@ Finance-Intelli/
 
 - Node.js 24+
 - pnpm 11+
-- PostgreSQL database
+- MongoDB Atlas database
 
 ### 1. Clone and install
 
@@ -248,7 +248,7 @@ The root `vercel.json` builds the web artifact, maps `/api/*` to the Express fun
 
 ## ◇ Roadmap ideas
 
-- Complete the reconciled PostgreSQL-to-MongoDB Atlas repository migration
+- Continue expanding automated reconciliation and financial integrity checks
 - Expand automated aggregation and route integration coverage
 - Add CSV/OFX bank import with duplicate detection
 - Introduce configurable dashboard widgets and richer forecasting

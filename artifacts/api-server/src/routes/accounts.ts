@@ -1,158 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { Router } from "express";
-import { accountBalanceSnapshotsTable, accountsTable, db, reconciliationsTable, transactionsTable } from "@workspace/db";
-import { and, asc, eq, isNull, lte, sql } from "drizzle-orm";
+import { collections,getCollection,nextId,withMongoTransaction,withoutMongoId,withoutMongoIds } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth";
 import { getAccountBalance } from "../lib/accounts";
 import { writeAudit } from "../lib/audit";
-
-const router = Router();
-const accountTypes = new Set(["cash", "bank", "credit_card", "loan", "investment", "wallet"]);
-
-function positiveAmount(value: unknown): number | null {
-  const amount = Number(value);
-  return Number.isFinite(amount) && amount > 0 ? amount : null;
-}
-
-async function serializeAccount(account: typeof accountsTable.$inferSelect) {
-  return {
-    id: account.id, name: account.name, type: account.type, currency: account.currency,
-    openingBalance: Number(account.openingBalance),
-    currentBalance: await getAccountBalance(account.profileId, account.id),
-    institution: account.institution, accountNumberLast4: account.accountNumberLast4,
-    color: account.color, icon: account.icon, includeInNetWorth: account.includeInNetWorth,
-    status: account.status, lastReconciledDate: account.lastReconciledDate, version: account.version,
-  };
-}
-
-router.get("/accounts", requireAuth, async (req, res) => {
-  const rows = await db.select().from(accountsTable)
-    .where(and(eq(accountsTable.profileId, req.user!.userId), isNull(accountsTable.archivedAt)))
-    .orderBy(asc(accountsTable.createdAt));
-  res.json(await Promise.all(rows.map(serializeAccount)));
-});
-
-router.post("/accounts", requireAuth, async (req, res) => {
-  const { name, type, currency, openingBalance, institution, accountNumberLast4, color, icon, includeInNetWorth } = req.body ?? {};
-  if (typeof name !== "string" || name.trim().length < 2 || !accountTypes.has(type)) {
-    res.status(400).json({ error: "A valid account name and type are required." }); return;
-  }
-  const balance = Number(openingBalance ?? 0);
-  if (!Number.isFinite(balance)) { res.status(400).json({ error: "Opening balance must be a number." }); return; }
-  const [account] = await db.insert(accountsTable).values({
-    profileId: req.user!.userId, name: name.trim(), type,
-    currency: typeof currency === "string" ? currency : "INR", openingBalance: String(balance),
-    institution: institution || null, accountNumberLast4: accountNumberLast4 || null,
-    color: color || null, icon: icon || null, includeInNetWorth: includeInNetWorth !== false,
-  }).returning();
-  await writeAudit(req, "create", "account", account.id, null, account);
-  res.status(201).json(await serializeAccount(account));
-});
-
-router.patch("/accounts/:id", requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  const [before] = await db.select().from(accountsTable)
-    .where(and(eq(accountsTable.id, id), eq(accountsTable.profileId, req.user!.userId))).limit(1);
-  if (!before) { res.status(404).json({ error: "Account not found" }); return; }
-  if (req.body.version != null && Number(req.body.version) !== before.version) {
-    res.status(409).json({ error: "This account changed elsewhere. Refresh and retry." }); return;
-  }
-  const updates: Record<string, unknown> = { version: sql`${accountsTable.version} + 1` };
-  for (const key of ["name", "institution", "accountNumberLast4", "color", "icon"] as const) {
-    if (Object.prototype.hasOwnProperty.call(req.body, key)) updates[key] = req.body[key] || null;
-  }
-  if (req.body.type != null && accountTypes.has(req.body.type)) updates.type = req.body.type;
-  if (req.body.currency != null && typeof req.body.currency === "string" && req.body.currency.trim().length === 3) updates.currency = req.body.currency.trim().toUpperCase();
-  if (req.body.openingBalance != null && Number.isFinite(Number(req.body.openingBalance))) updates.openingBalance = String(Number(req.body.openingBalance));
-  if (req.body.includeInNetWorth != null && typeof req.body.includeInNetWorth === "boolean") updates.includeInNetWorth = req.body.includeInNetWorth;
-  const [account] = await db.update(accountsTable).set(updates)
-    .where(and(eq(accountsTable.id, id), eq(accountsTable.profileId, req.user!.userId))).returning();
-  await writeAudit(req, "update", "account", id, before, account);
-  res.json(await serializeAccount(account));
-});
-
-router.delete("/accounts/:id", requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  const [before] = await db.select().from(accountsTable)
-    .where(and(eq(accountsTable.id, id), eq(accountsTable.profileId, req.user!.userId))).limit(1);
-  if (!before) { res.status(404).json({ error: "Account not found" }); return; }
-  const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(transactionsTable)
-    .where(and(eq(transactionsTable.accountId, id), isNull(transactionsTable.deletedAt)));
-  if (count > 0) {
-    await db.update(accountsTable).set({ status: "archived", archivedAt: new Date(), version: sql`${accountsTable.version} + 1` })
-      .where(eq(accountsTable.id, id));
-  } else {
-    await db.delete(accountsTable).where(eq(accountsTable.id, id));
-  }
-  await writeAudit(req, count > 0 ? "archive" : "delete", "account", id, before, null);
-  res.sendStatus(204);
-});
-
-router.post("/transfers", requireAuth, async (req, res) => {
-  const { fromAccountId, toAccountId, amount: rawAmount, date, description, status = "cleared" } = req.body ?? {};
-  const amount = positiveAmount(rawAmount);
-  if (!amount || Number(fromAccountId) === Number(toAccountId) || !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
-    res.status(400).json({ error: "Different source/destination accounts, a positive amount, and a date are required." }); return;
-  }
-  const ids = [Number(fromAccountId), Number(toAccountId)];
-  const owned = await db.select({ id: accountsTable.id }).from(accountsTable)
-    .where(and(eq(accountsTable.profileId, req.user!.userId), sql`${accountsTable.id} in (${sql.join(ids.map(id => sql`${id}`), sql`,`)})`));
-  if (owned.length !== 2) { res.status(404).json({ error: "One or both accounts were not found." }); return; }
-  const transferGroupId = randomUUID();
-  const created = await db.transaction(async tx => {
-    return tx.insert(transactionsTable).values([
-      { profileId: req.user!.userId, accountId: ids[0], type: "transfer", direction: "debit", amount: String(amount), date, description: description || "Transfer", status, transferGroupId },
-      { profileId: req.user!.userId, accountId: ids[1], type: "transfer", direction: "credit", amount: String(amount), date, description: description || "Transfer", status, transferGroupId },
-    ]).returning();
-  });
-  await writeAudit(req, "create", "transfer", transferGroupId, null, { fromAccountId, toAccountId, amount, date });
-  res.status(201).json({ transferGroupId, entries: created });
-});
-
-router.get("/accounts/:id/balance-history", requireAuth, async (req, res) => {
-  const id = Number(req.params.id);
-  const rows = await db.select({
-    date: transactionsTable.date,
-    movement: sql<string>`sum(case when ${transactionsTable.direction} = 'credit' then ${transactionsTable.amount} else -${transactionsTable.amount} end)`,
-  }).from(transactionsTable)
-    .where(and(eq(transactionsTable.profileId, req.user!.userId), eq(transactionsTable.accountId, id), isNull(transactionsTable.deletedAt)))
-    .groupBy(transactionsTable.date).orderBy(transactionsTable.date);
-  const [account] = await db.select().from(accountsTable)
-    .where(and(eq(accountsTable.id, id), eq(accountsTable.profileId, req.user!.userId))).limit(1);
-  if (!account) { res.status(404).json({ error: "Account not found" }); return; }
-  let balance = Number(account.openingBalance);
-  res.json(rows.map(row => ({ date: row.date, balance: balance += Number(row.movement) })));
-});
-
-router.post("/accounts/:id/reconcile", requireAuth, async (req, res) => {
-  const accountId = Number(req.params.id);
-  const statementBalance = Number(req.body?.statementBalance);
-  const statementDate = String(req.body?.statementDate ?? "");
-  if (!Number.isFinite(statementBalance) || !/^\d{4}-\d{2}-\d{2}$/.test(statementDate)) {
-    res.status(400).json({ error: "Statement date and balance are required." }); return;
-  }
-  const calculatedBalance = await getAccountBalance(req.user!.userId, accountId);
-  const difference = Math.round((statementBalance - calculatedBalance) * 100) / 100;
-  const [reconciliation] = await db.transaction(async tx => {
-    await tx.update(transactionsTable).set({ status: "reconciled", version: sql`${transactionsTable.version} + 1` })
-      .where(and(eq(transactionsTable.profileId, req.user!.userId), eq(transactionsTable.accountId, accountId),
-        eq(transactionsTable.status, "cleared"), lte(transactionsTable.date, statementDate), isNull(transactionsTable.deletedAt)));
-    await tx.update(accountsTable).set({ lastReconciledDate: statementDate, version: sql`${accountsTable.version} + 1` })
-      .where(and(eq(accountsTable.id, accountId), eq(accountsTable.profileId, req.user!.userId)));
-    await tx.insert(accountBalanceSnapshotsTable).values({
-      profileId: req.user!.userId, accountId, balance: String(statementBalance), asOfDate: statementDate, source: "reconciliation",
-    }).onConflictDoUpdate({
-      target: [accountBalanceSnapshotsTable.accountId, accountBalanceSnapshotsTable.asOfDate, accountBalanceSnapshotsTable.source],
-      set: { balance: String(statementBalance) },
-    });
-    return tx.insert(reconciliationsTable).values({
-      profileId: req.user!.userId, accountId, statementDate, statementBalance: String(statementBalance),
-      calculatedBalance: String(calculatedBalance), difference: String(difference),
-      status: difference === 0 ? "completed" : "open", completedAt: difference === 0 ? new Date() : null,
-    }).returning();
-  });
-  await writeAudit(req, "reconcile", "account", accountId, null, reconciliation);
-  res.status(201).json({ ...reconciliation, statementBalance, calculatedBalance, difference });
-});
-
+const router=Router(); const accountTypes=new Set(["cash","bank","credit_card","loan","investment","wallet"]); const active={$in:[null,undefined]};
+const positive=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)&&n>0?n:null;};
+async function serialize(a:any){return {...a,_id:undefined,openingBalance:Number(a.openingBalance??0),currentBalance:await getAccountBalance(a.profileId,a.id)};}
+router.get("/accounts",requireAuth,async(req,res)=>{const c=await getCollection(collections.accounts);const rows=withoutMongoIds(await c.find({profileId:req.user!.userId,archivedAt:active}).sort({createdAt:1}).toArray());res.json(await Promise.all(rows.map(serialize)));});
+router.post("/accounts",requireAuth,async(req,res)=>{const b=req.body??{};if(typeof b.name!=="string"||b.name.trim().length<2||!accountTypes.has(b.type)){res.status(400).json({error:"A valid account name and type are required."});return;}const opening=Number(b.openingBalance??0);if(!Number.isFinite(opening)){res.status(400).json({error:"Opening balance must be a number."});return;}const c=await getCollection(collections.accounts);const now=new Date();const a:any={id:await nextId(collections.accounts),profileId:req.user!.userId,name:b.name.trim(),type:b.type,currency:typeof b.currency==="string"?b.currency:"INR",openingBalance:opening,currentBalance:opening,institution:b.institution||null,accountNumberLast4:b.accountNumberLast4||null,color:b.color||null,icon:b.icon||null,includeInNetWorth:b.includeInNetWorth!==false,status:"active",version:1,archivedAt:null,createdAt:now,updatedAt:now};await c.insertOne(a);await writeAudit(req,"create","account",a.id,null,a);res.status(201).json(await serialize(a));});
+router.patch("/accounts/:id",requireAuth,async(req,res)=>{const id=Number(req.params.id),c=await getCollection(collections.accounts);const before:any=withoutMongoId(await c.findOne({id,profileId:req.user!.userId}));if(!before){res.status(404).json({error:"Account not found"});return;}if(req.body.version!=null&&Number(req.body.version)!==before.version){res.status(409).json({error:"This account changed elsewhere. Refresh and retry."});return;}const u:any={updatedAt:new Date()};for(const k of ["name","institution","accountNumberLast4","color","icon"])if(Object.prototype.hasOwnProperty.call(req.body,k))u[k]=req.body[k]||null;if(req.body.type!=null&&accountTypes.has(req.body.type))u.type=req.body.type;if(typeof req.body.currency==="string"&&req.body.currency.trim().length===3)u.currency=req.body.currency.trim().toUpperCase();if(req.body.openingBalance!=null&&Number.isFinite(Number(req.body.openingBalance)))u.openingBalance=Number(req.body.openingBalance);if(typeof req.body.includeInNetWorth==="boolean")u.includeInNetWorth=req.body.includeInNetWorth;const a:any=withoutMongoId(await c.findOneAndUpdate({id,profileId:req.user!.userId},{$set:u,$inc:{version:1}},{returnDocument:"after"}));await writeAudit(req,"update","account",id,before,a);res.json(await serialize(a));});
+router.delete("/accounts/:id",requireAuth,async(req,res)=>{const id=Number(req.params.id),c=await getCollection(collections.accounts),t=await getCollection(collections.transactions);const before=withoutMongoId(await c.findOne({id,profileId:req.user!.userId}));if(!before){res.status(404).json({error:"Account not found"});return;}const count=await t.countDocuments({accountId:id,deletedAt:active});if(count)await c.updateOne({id},{$set:{status:"archived",archivedAt:new Date(),updatedAt:new Date()},$inc:{version:1}});else await c.deleteOne({id});await writeAudit(req,count?"archive":"delete","account",id,before,null);res.sendStatus(204);});
+router.post("/transfers",requireAuth,async(req,res)=>{const b=req.body??{},amount=positive(b.amount),ids=[Number(b.fromAccountId),Number(b.toAccountId)];if(!amount||ids[0]===ids[1]||!/^\d{4}-\d{2}-\d{2}$/.test(String(b.date))){res.status(400).json({error:"Different source/destination accounts, a positive amount, and a date are required."});return;}const ac=await getCollection(collections.accounts);if(await ac.countDocuments({profileId:req.user!.userId,id:{$in:ids}})!==2){res.status(404).json({error:"One or both accounts were not found."});return;}const group=randomUUID();const created=await withMongoTransaction(async session=>{const t=await getCollection(collections.transactions),now=new Date();const entries=await Promise.all(ids.map(async(id,i)=>({id:await nextId(collections.transactions,session),profileId:req.user!.userId,accountId:id,type:"transfer",direction:i?"credit":"debit",amount,date:b.date,description:b.description||"Transfer",status:b.status||"cleared",transferGroupId:group,version:1,deletedAt:null,createdAt:now,updatedAt:now})));await t.insertMany(entries,{session});return entries;});await writeAudit(req,"create","transfer",group,null,{fromAccountId:ids[0],toAccountId:ids[1],amount,date:b.date});res.status(201).json({transferGroupId:group,entries:created});});
+router.get("/accounts/:id/balance-history",requireAuth,async(req,res)=>{const id=Number(req.params.id),a=await getCollection(collections.accounts),t=await getCollection(collections.transactions);const account=await a.findOne({id,profileId:req.user!.userId});if(!account){res.status(404).json({error:"Account not found"});return;}const rows=await t.aggregate<any>([{$match:{profileId:req.user!.userId,accountId:id,deletedAt:active}},{$group:{_id:"$date",movement:{$sum:{$cond:[{$eq:["$direction","credit"]},"$amount",{$multiply:["$amount",-1]}]}}}},{$sort:{_id:1}}]).toArray();let balance=Number(account.openingBalance??0);res.json(rows.map(r=>({date:r._id,balance:balance+=Number(r.movement)})));});
+router.post("/accounts/:id/reconcile",requireAuth,async(req,res)=>{const accountId=Number(req.params.id),statementBalance=Number(req.body?.statementBalance),statementDate=String(req.body?.statementDate??"");if(!Number.isFinite(statementBalance)||!/^\d{4}-\d{2}-\d{2}$/.test(statementDate)){res.status(400).json({error:"Statement date and balance are required."});return;}const calculatedBalance=await getAccountBalance(req.user!.userId,accountId),difference=Math.round((statementBalance-calculatedBalance)*100)/100;const record=await withMongoTransaction(async session=>{const t=await getCollection(collections.transactions),a=await getCollection(collections.accounts),s=await getCollection(collections.accountBalanceSnapshots),r=await getCollection(collections.reconciliations);await t.updateMany({profileId:req.user!.userId,accountId,status:"cleared",date:{$lte:statementDate},deletedAt:active},{$set:{status:"reconciled",updatedAt:new Date()},$inc:{version:1}},{session});await a.updateOne({id:accountId,profileId:req.user!.userId},{$set:{lastReconciledDate:statementDate,updatedAt:new Date()},$inc:{version:1}},{session});await s.updateOne({accountId,asOfDate:statementDate,source:"reconciliation"},{$set:{profileId:req.user!.userId,balance:statementBalance,updatedAt:new Date()},$setOnInsert:{id:await nextId(collections.accountBalanceSnapshots,session),createdAt:new Date()}},{upsert:true,session});const x:any={id:await nextId(collections.reconciliations,session),profileId:req.user!.userId,accountId,statementDate,statementBalance,calculatedBalance,difference,status:difference===0?"completed":"open",completedAt:difference===0?new Date():null,createdAt:new Date(),updatedAt:new Date()};await r.insertOne(x,{session});return x;});await writeAudit(req,"reconcile","account",accountId,null,record);res.status(201).json(record);});
 export default router;
