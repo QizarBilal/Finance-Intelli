@@ -2,12 +2,12 @@ import { useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useSetupProfile } from '@workspace/api-client-react';
-import { setToken } from '@/lib/api-client';
+import { getApiErrorMessage, setToken } from '@/lib/api-client';
 import { useQueryClient } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Zap, Loader2, ArrowRight, ArrowLeft, IndianRupee, User, Lock, Briefcase, CheckCircle2 } from 'lucide-react';
+import { Zap, Loader2, ArrowRight, ArrowLeft, IndianRupee, User, Lock, Briefcase, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 const STEPS = ['Account', 'Profile'];
@@ -18,6 +18,8 @@ export default function Signup() {
   const queryClient = useQueryClient();
   const signupMutation = useSetupProfile();
   const [step, setStep] = useState(0);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [form, setForm] = useState({
     name: '',
@@ -59,8 +61,8 @@ export default function Signup() {
           queryClient.invalidateQueries();
           setLocation('/dashboard');
         },
-        onError: (err: any) => {
-          const msg = err?.error || 'Something went wrong.';
+        onError: (err: unknown) => {
+          const msg = getApiErrorMessage(err, 'Something went wrong.');
           toast({ title: 'Sign up failed', description: msg, variant: 'destructive' });
           if (msg.toLowerCase().includes('username') || msg.toLowerCase().includes('exists')) setStep(0);
         },
@@ -171,16 +173,26 @@ export default function Signup() {
                   <Label htmlFor="password">Password</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                    <Input id="password" type="password" autoComplete="new-password" value={form.password} onChange={set('password')}
-                      className="h-11 pl-9 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="min. 6 characters" />
+                    <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={form.password} onChange={set('password')}
+                      className="h-11 pl-9 pr-10 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="min. 6 characters" />
+                    <button type="button" onClick={() => setShowPassword(value => !value)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="confirmPassword">Confirm Password</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                    <Input id="confirmPassword" type="password" autoComplete="new-password" value={form.confirmPassword} onChange={set('confirmPassword')}
-                      className="h-11 pl-9 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="••••••••" />
+                    <Input id="confirmPassword" type={showConfirmPassword ? 'text' : 'password'} autoComplete="new-password" value={form.confirmPassword} onChange={set('confirmPassword')}
+                      className="h-11 pl-9 pr-10 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="••••••••" />
+                    <button type="button" onClick={() => setShowConfirmPassword(value => !value)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      aria-label={showConfirmPassword ? 'Hide password confirmation' : 'Show password confirmation'} aria-pressed={showConfirmPassword}>
+                      {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
                 <Button type="submit" className="w-full h-11 mt-2 bg-primary hover:bg-primary/90 font-semibold shadow-md shadow-primary/25 gap-2">

@@ -9,13 +9,23 @@ setAuthTokenGetter(null);
 
 // Helper functions for token management
 export function setToken(_token?: string) {
-  sessionStorage.setItem('finance_session', '1');
+  localStorage.setItem('finance_session', '1');
 }
 
 export function clearToken() {
-  sessionStorage.removeItem('finance_session');
+  localStorage.removeItem('finance_session');
 }
 
 export function hasToken(): boolean {
-  return true;
+  return localStorage.getItem('finance_session') === '1';
+}
+
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== 'object') return fallback;
+  const apiError = error as { data?: unknown; message?: unknown };
+  if (apiError.data && typeof apiError.data === 'object') {
+    const message = (apiError.data as { error?: unknown }).error;
+    if (typeof message === 'string' && message.trim()) return message;
+  }
+  return typeof apiError.message === 'string' && apiError.message.trim() ? apiError.message : fallback;
 }
