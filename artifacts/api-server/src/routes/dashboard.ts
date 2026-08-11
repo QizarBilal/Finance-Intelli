@@ -10,6 +10,7 @@ import {
   resolveBudgetCategory,
   sumExpensesForCategory,
 } from "../lib/budgeting";
+import { getAccountBalance } from "../lib/accounts";
 const router = Router(),
   active = { $in: [null, undefined] };
 async function stats(id: number, p: any, tz: string, ws: "monday" | "sunday") {
@@ -45,64 +46,33 @@ router.get("/dashboard/summary", requireAuth, async (req, res) => {
       stats(id, "yearly", tz, ws),
     ]),
     a = await getCollection(collections.accounts),
-    allAccounts = await a.find({ profileId: id, archivedAt: active }).toArray(),
-    accounts = allAccounts.filter(
-      (account) => account.includeInNetWorth !== false,
+    accounts = await a
+      .find({
+        profileId: id,
+        archivedAt: active,
+        includeInNetWorth: { $ne: false },
+      })
+      .toArray(),
+    accountIds = accounts.map((account) => account.id),
+    accountBalances = await Promise.all(
+      accounts.map((account) => getAccountBalance(id, Number(account.id))),
     ),
-    excludedAccountIds = allAccounts
-      .filter((account) => account.includeInNetWorth === false)
-      .map((account) => account.id),
+    balance = accountBalances.reduce(
+      (sum, accountBalance) => sum + accountBalance,
+      0,
+    ),
     month = periodRange("monthly", tz, ws),
     t = await getCollection(collections.transactions),
     ledgerMatch = {
       profileId: id,
-      accountId: { $nin: excludedAccountIds },
+      accountId: { $in: accountIds },
       deletedAt: active,
       status: { $ne: "void" },
     },
-    movement = await t
-      .aggregate<any>([
-        { $match: ledgerMatch },
-        {
-          $group: {
-            _id: null,
-            total: {
-              $sum: {
-                $cond: [
-                  { $eq: ["$direction", "credit"] },
-                  {
-                    $convert: {
-                      input: "$amount",
-                      to: "double",
-                      onError: 0,
-                      onNull: 0,
-                    },
-                  },
-                  {
-                    $multiply: [
-                      {
-                        $convert: {
-                          input: "$amount",
-                          to: "double",
-                          onError: 0,
-                          onNull: 0,
-                        },
-                      },
-                      -1,
-                    ],
-                  },
-                ],
-              },
-            },
-          },
-        },
-      ])
-      .toArray(),
     openingBalances = accounts.reduce(
       (sum, account) => sum + Number(account.openingBalance ?? 0),
       0,
     ),
-    balance = openingBalances + Number(movement[0]?.total ?? 0),
     prior = await t
       .aggregate<any>([
         {

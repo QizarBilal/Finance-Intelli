@@ -14,13 +14,12 @@ test("account balance equals opening balance plus posted ledger entries", () => 
   );
 });
 
-test("dashboard balance includes legacy profile ledger movement", () => {
+test("dashboard balance matches included account ledger movement", () => {
   assert.equal(
     ledgerBalance(20_000, [
-      { amount: 31_200, direction: "credit", status: "cleared" },
-      { amount: 24_861, direction: "debit", status: "cleared" },
+      { amount: 55, direction: "debit", status: "cleared" },
     ]),
-    26_339,
+    19_945,
   );
 });
 
