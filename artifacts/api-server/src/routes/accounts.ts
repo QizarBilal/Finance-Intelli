@@ -65,7 +65,6 @@ router.patch("/accounts/:id", requireAuth, async (req, res) => {
   if (req.body.currency != null && typeof req.body.currency === "string" && req.body.currency.trim().length === 3) updates.currency = req.body.currency.trim().toUpperCase();
   if (req.body.openingBalance != null && Number.isFinite(Number(req.body.openingBalance))) updates.openingBalance = String(Number(req.body.openingBalance));
   if (req.body.includeInNetWorth != null && typeof req.body.includeInNetWorth === "boolean") updates.includeInNetWorth = req.body.includeInNetWorth;
-  if (req.body.includeInNetWorth != null) updates.includeInNetWorth = Boolean(req.body.includeInNetWorth);
   const [account] = await db.update(accountsTable).set(updates)
     .where(and(eq(accountsTable.id, id), eq(accountsTable.profileId, req.user!.userId))).returning();
   await writeAudit(req, "update", "account", id, before, account);
