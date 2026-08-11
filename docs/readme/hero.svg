@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="520" viewBox="0 0 1400 520" role="img" aria-labelledby="title desc">
+  <title id="title">Finance Intelli</title>
+  <desc id="desc">Personal finance intelligence, designed by Mohammed Qizar Bilal.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#070b12"/><stop offset="1" stop-color="#14101a"/></linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff334e"/><stop offset="1" stop-color="#ff6b7c"/></linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ffffff" stop-opacity=".10"/><stop offset="1" stop-color="#ffffff" stop-opacity=".025"/></linearGradient>
+    <filter id="glow"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect width="1400" height="520" rx="34" fill="url(#bg)"/>
+  <circle cx="1180" cy="70" r="190" fill="#ff2947" opacity=".14" filter="url(#glow)"/>
+  <circle cx="250" cy="480" r="240" fill="#315cff" opacity=".09" filter="url(#glow)"/>
+  <g transform="translate(72 74)">
+    <rect width="72" height="72" rx="22" fill="url(#accent)"/>
+    <path d="M19 47V25h9l8 12 8-12h9v22h-8V36l-9 13-9-13v11z" fill="white"/>
+    <text x="0" y="132" fill="#fff" font-family="Inter,Segoe UI,sans-serif" font-size="64" font-weight="800" letter-spacing="-2">Finance Intelli</text>
+    <text x="0" y="180" fill="#9da7b9" font-family="Inter,Segoe UI,sans-serif" font-size="24">Clarity for every rupee. Intelligence for every decision.</text>
+    <g transform="translate(0 224)" font-family="Inter,Segoe UI,sans-serif" font-size="16" font-weight="600">
+      <rect width="156" height="42" rx="21" fill="#ff334e" fill-opacity=".15" stroke="#ff334e" stroke-opacity=".5"/><text x="24" y="27" fill="#ff7284">SMART LEDGER</text>
+      <rect x="170" width="148" height="42" rx="21" fill="#18d99b" fill-opacity=".10" stroke="#18d99b" stroke-opacity=".45"/><text x="195" y="27" fill="#46e3b2">LIVE INSIGHTS</text>
+      <rect x="332" width="164" height="42" rx="21" fill="#5c7cff" fill-opacity=".10" stroke="#5c7cff" stroke-opacity=".45"/><text x="356" y="27" fill="#88a0ff">BUDGET CONTROL</text>
+    </g>
+    <text x="0" y="348" fill="#737f92" font-family="Inter,Segoe UI,sans-serif" font-size="17">A personal finance OS by Mohammed Qizar Bilal</text>
+  </g>
+  <g transform="translate(850 108)">
+    <rect width="470" height="310" rx="28" fill="url(#glass)" stroke="#ffffff" stroke-opacity=".11"/>
+    <text x="34" y="46" fill="#9da7b9" font-family="Inter,Segoe UI,sans-serif" font-size="14" font-weight="600">FINANCIAL PULSE</text>
+    <text x="34" y="98" fill="#fff" font-family="Inter,Segoe UI,sans-serif" font-size="38" font-weight="800">₹ 31,200</text>
+    <text x="300" y="91" fill="#42dfad" font-family="Inter,Segoe UI,sans-serif" font-size="15" font-weight="700">+ 20.3%</text>
+    <path d="M34 225 C88 192 120 210 168 161 S253 190 298 129 S380 151 432 77" fill="none" stroke="url(#accent)" stroke-width="7" stroke-linecap="round"/>
+    <path d="M34 225 C88 192 120 210 168 161 S253 190 298 129 S380 151 432 77 L432 258 L34 258Z" fill="#ff334e" opacity=".08"/>
+    <circle cx="432" cy="77" r="8" fill="#ff536a"/><circle cx="432" cy="77" r="16" fill="#ff536a" opacity=".2"/>
+    <text x="34" y="286" fill="#737f92" font-family="Inter,Segoe UI,sans-serif" font-size="14">Dashboard • Budgets • Analytics • Accounts</text>
+  </g>
+</svg>
