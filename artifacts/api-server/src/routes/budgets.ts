@@ -15,6 +15,7 @@ import {
   DeleteBudgetParams,
 } from "@workspace/api-zod";
 import { periodRange } from "../lib/dates";
+import { resolveBudgetCategory } from "../lib/budgeting";
 const router = Router(),
   active = { $in: [null, undefined] };
 function range(b: any, tz = "UTC", ws: "monday" | "sunday" = "monday") {
@@ -95,14 +96,10 @@ router.get("/budgets", requireAuth, async (req, res) => {
     .toArray();
   const out = [];
   for (const budget of budgets) {
-    const inferred =
-        budget.category ??
-        txs.find(
-          (x) =>
-            (x.category ?? "").trim().toLowerCase() ===
-            budget.name.trim().toLowerCase(),
-        )?.category ??
-        null,
+    const inferred = resolveBudgetCategory(
+        budget,
+        txs.map((transaction) => transaction.category),
+      ),
       effective = { ...budget, category: inferred };
     out.push(ser(effective, await spent(effective, userId, tz, ws)));
   }

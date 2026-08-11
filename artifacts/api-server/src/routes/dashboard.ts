@@ -7,6 +7,10 @@ import {
 } from "@workspace/api-zod";
 import { periodRange } from "../lib/dates";
 import { getAccountBalance } from "../lib/accounts";
+import {
+  resolveBudgetCategory,
+  sumExpensesForCategory,
+} from "../lib/budgeting";
 const router = Router(),
   active = { $in: [null, undefined] };
 async function stats(id: number, p: any, tz: string, ws: "monday" | "sunday") {
@@ -43,7 +47,11 @@ router.get("/dashboard/summary", requireAuth, async (req, res) => {
     ]),
     a = await getCollection(collections.accounts),
     accounts = await a
-      .find({ profileId: id, includeInNetWorth: true, archivedAt: active })
+      .find({
+        profileId: id,
+        includeInNetWorth: { $ne: false },
+        archivedAt: active,
+      })
       .toArray(),
     balances = await Promise.all(
       accounts.map((x) => getAccountBalance(id, Number(x.id))),
@@ -84,12 +92,29 @@ router.get("/dashboard/summary", requireAuth, async (req, res) => {
     trend = opening
       ? Math.round(((balance - opening) / Math.abs(opening)) * 1000) / 10
       : 0,
-    b = await getCollection(collections.budgets),
+    b = await getCollection<any>(collections.budgets),
     budgets = await b.find({ profileId: id, archivedAt: active }).toArray(),
-    overall = budgets
-      .filter((x) => x.period === "monthly" && !x.category)
-      .reduce((s, x) => s + Number(x.limitAmount ?? x.amount ?? 0), 0),
-    usage = overall ? (monthly.expense / overall) * 100 : 0,
+    monthlyBudgets = budgets.filter((budget) => budget.period === "monthly"),
+    monthlyExpenses = await t
+      .find({
+        profileId: id,
+        type: "expense",
+        deletedAt: active,
+        status: { $ne: "void" },
+        date: { $gte: month.from, $lte: month.to },
+      })
+      .project({ category: 1, amount: 1 })
+      .toArray(),
+    availableCategories = monthlyExpenses.map((expense) => expense.category),
+    overall = monthlyBudgets.reduce(
+      (sum, budget) => sum + Number(budget.limitAmount ?? budget.amount ?? 0),
+      0,
+    ),
+    budgetedSpend = monthlyBudgets.reduce((sum, budget) => {
+      const category = resolveBudgetCategory(budget, availableCategories);
+      return sum + sumExpensesForCategory(monthlyExpenses, category);
+    }, 0),
+    usage = overall ? (budgetedSpend / overall) * 100 : 0,
     rate = monthly.income ? (monthly.savings / monthly.income) * 100 : 0,
     score = Math.min(
       100,
