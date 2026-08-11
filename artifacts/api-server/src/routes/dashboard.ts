@@ -6,7 +6,6 @@ import {
   GetUpcomingRemindersQueryParams,
 } from "@workspace/api-zod";
 import { periodRange } from "../lib/dates";
-import { getAccountBalance } from "../lib/accounts";
 import {
   resolveBudgetCategory,
   sumExpensesForCategory,
@@ -46,27 +45,69 @@ router.get("/dashboard/summary", requireAuth, async (req, res) => {
       stats(id, "yearly", tz, ws),
     ]),
     a = await getCollection(collections.accounts),
-    accounts = await a
-      .find({
-        profileId: id,
-        includeInNetWorth: { $ne: false },
-        archivedAt: active,
-      })
-      .toArray(),
-    balances = await Promise.all(
-      accounts.map((x) => getAccountBalance(id, Number(x.id))),
+    allAccounts = await a.find({ profileId: id, archivedAt: active }).toArray(),
+    accounts = allAccounts.filter(
+      (account) => account.includeInNetWorth !== false,
     ),
-    balance = balances.reduce((s, x) => s + x, 0),
+    excludedAccountIds = allAccounts
+      .filter((account) => account.includeInNetWorth === false)
+      .map((account) => account.id),
     month = periodRange("monthly", tz, ws),
     t = await getCollection(collections.transactions),
+    ledgerMatch = {
+      profileId: id,
+      accountId: { $nin: excludedAccountIds },
+      deletedAt: active,
+      status: { $ne: "void" },
+    },
+    movement = await t
+      .aggregate<any>([
+        { $match: ledgerMatch },
+        {
+          $group: {
+            _id: null,
+            total: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$direction", "credit"] },
+                  {
+                    $convert: {
+                      input: "$amount",
+                      to: "double",
+                      onError: 0,
+                      onNull: 0,
+                    },
+                  },
+                  {
+                    $multiply: [
+                      {
+                        $convert: {
+                          input: "$amount",
+                          to: "double",
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                      -1,
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ])
+      .toArray(),
+    openingBalances = accounts.reduce(
+      (sum, account) => sum + Number(account.openingBalance ?? 0),
+      0,
+    ),
+    balance = openingBalances + Number(movement[0]?.total ?? 0),
     prior = await t
       .aggregate<any>([
         {
           $match: {
-            profileId: id,
-            accountId: { $in: accounts.map((x) => x.id) },
-            deletedAt: active,
-            status: { $ne: "void" },
+            ...ledgerMatch,
             date: { $lt: month.from },
           },
         },
@@ -77,8 +118,27 @@ router.get("/dashboard/summary", requireAuth, async (req, res) => {
               $sum: {
                 $cond: [
                   { $eq: ["$direction", "credit"] },
-                  "$amount",
-                  { $multiply: ["$amount", -1] },
+                  {
+                    $convert: {
+                      input: "$amount",
+                      to: "double",
+                      onError: 0,
+                      onNull: 0,
+                    },
+                  },
+                  {
+                    $multiply: [
+                      {
+                        $convert: {
+                          input: "$amount",
+                          to: "double",
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                      -1,
+                    ],
+                  },
                 ],
               },
             },
@@ -86,9 +146,7 @@ router.get("/dashboard/summary", requireAuth, async (req, res) => {
         },
       ])
       .toArray(),
-    opening =
-      accounts.reduce((s, x) => s + Number(x.openingBalance ?? 0), 0) +
-      Number(prior[0]?.total ?? 0),
+    opening = openingBalances + Number(prior[0]?.total ?? 0),
     trend = opening
       ? Math.round(((balance - opening) / Math.abs(opening)) * 1000) / 10
       : 0,

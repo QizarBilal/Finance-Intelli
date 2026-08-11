@@ -14,6 +14,16 @@ test("account balance equals opening balance plus posted ledger entries", () => 
   );
 });
 
+test("dashboard balance includes legacy profile ledger movement", () => {
+  assert.equal(
+    ledgerBalance(20_000, [
+      { amount: 31_200, direction: "credit", status: "cleared" },
+      { amount: 24_861, direction: "debit", status: "cleared" },
+    ]),
+    26_339,
+  );
+});
+
 test("a two-sided transfer cannot create or destroy money", () => {
   assert.equal(
     transferIsBalanced([
