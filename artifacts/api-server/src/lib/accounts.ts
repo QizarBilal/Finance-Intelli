@@ -20,7 +20,7 @@ export async function getAccountBalance(profileId: number, accountId: number): P
     .leftJoin(transactionsTable, and(
       eq(transactionsTable.accountId, accountsTable.id),
       isNull(transactionsTable.deletedAt),
-      sql`${transactionsTable.status} in ('cleared','reconciled')`,
+      sql`${transactionsTable.status} <> 'void'`,
     ))
     .where(and(eq(accountsTable.id, accountId), eq(accountsTable.profileId, profileId)))
     .groupBy(accountsTable.id);

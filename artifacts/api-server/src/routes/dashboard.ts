@@ -52,7 +52,10 @@ router.get("/dashboard/summary", requireAuth, async (req, res): Promise<void> =>
   const [{ total: accountBalance }] = await db.select({
     total: sql<string>`coalesce(sum(${accountsTable.openingBalance}), 0) + coalesce((
       select sum(case when t.direction = 'credit' then t.amount else -t.amount end)
-      from transactions t where t.profile_id = ${userId} and t.deleted_at is null and t.status in ('cleared','reconciled')
+      from transactions t
+      join accounts a on a.id = t.account_id
+      where t.profile_id = ${userId} and t.deleted_at is null and t.status <> 'void'
+        and a.include_in_net_worth = true and a.archived_at is null
     ), 0)`,
   }).from(accountsTable).where(and(eq(accountsTable.profileId, userId), eq(accountsTable.includeInNetWorth, true), isNull(accountsTable.archivedAt)));
   const balance = Number(accountBalance ?? 0);
@@ -61,7 +64,8 @@ router.get("/dashboard/summary", requireAuth, async (req, res): Promise<void> =>
     total: sql<string>`coalesce(sum(${accountsTable.openingBalance}), 0) + coalesce((
       select sum(case when t.direction = 'credit' then t.amount else -t.amount end)
       from transactions t where t.profile_id = ${userId} and t.deleted_at is null
-        and t.status in ('cleared','reconciled') and t.date < ${currentMonthRange.from}
+        and t.status <> 'void' and t.date < ${currentMonthRange.from}
+        and t.account_id in (select id from accounts where profile_id = ${userId} and include_in_net_worth = true and archived_at is null)
     ), 0)`,
   }).from(accountsTable).where(and(eq(accountsTable.profileId, userId), eq(accountsTable.includeInNetWorth, true), isNull(accountsTable.archivedAt)));
   const openingNetWorth = Number(balanceAtMonthStart ?? 0);

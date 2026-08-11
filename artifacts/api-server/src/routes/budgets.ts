@@ -37,7 +37,7 @@ async function computeSpent(budget: typeof budgetsTable.$inferSelect, userId: nu
     isNull(transactionsTable.deletedAt),
     sql`${transactionsTable.status} <> 'void'`,
   ];
-  if (budget.category) conditions.push(eq(transactionsTable.category, budget.category));
+  if (budget.category) conditions.push(sql`lower(trim(coalesce(${transactionsTable.category}, ''))) = lower(trim(${budget.category}))`);
 
   const [{ total }] = await db.select({ total: sql<string>`coalesce(sum(amount), 0)` })
     .from(transactionsTable).where(and(...conditions));
@@ -76,9 +76,15 @@ router.get("/budgets", requireAuth, async (req, res): Promise<void> => {
   )).groupBy(transactionsTable.date, transactionsTable.category);
   const results = budgets.map((budget, index) => {
     const range = ranges[index];
+    // Older UI versions did not expose a category field, so category budgets
+    // were commonly saved with only a matching name (for example "Snack").
+    // Infer that link at read time to preserve the stored records unchanged.
+    const inferredCategory = budget.category ?? spendRows.find(row =>
+      (row.category ?? '').trim().toLocaleLowerCase() === budget.name.trim().toLocaleLowerCase())?.category ?? null;
+    const effectiveBudget = { ...budget, category: inferredCategory };
     const spent = spendRows.reduce((sum, row) => row.date >= range.dateFrom && row.date <= range.dateTo &&
-      (!budget.category || budget.category === row.category) ? sum + Number(row.amount) : sum, 0);
-    return serializeBudget(budget, spent);
+      (!inferredCategory || inferredCategory.trim().toLocaleLowerCase() === (row.category ?? '').trim().toLocaleLowerCase()) ? sum + Number(row.amount) : sum, 0);
+    return serializeBudget(effectiveBudget, spent);
   });
   res.json(results);
 });

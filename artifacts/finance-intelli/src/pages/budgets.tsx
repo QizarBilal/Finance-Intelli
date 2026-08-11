@@ -224,6 +224,12 @@ function BudgetForm({ budget, onClose }: { budget: Budget | null, onClose: () =>
             </SelectContent>
           </Select>
         </div>
+
+        <div className="space-y-2">
+          <Label>Expense Category</Label>
+          <Input value={formData.category} onChange={e => setFormData(p => ({...p, category: e.target.value}))} placeholder="e.g. Snack" />
+          <p className="text-xs text-muted-foreground">Only expenses in this category count toward the limit. Leave blank for all expenses.</p>
+        </div>
         
         <div className="space-y-2">
           <Label>Alert Threshold (%)</Label>

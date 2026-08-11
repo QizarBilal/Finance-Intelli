@@ -12,6 +12,24 @@ import { writeAudit } from "../lib/audit";
 
 const router = Router();
 
+async function upsertTransactionCategory(userId: number, name: string, transactionType: string, incrementUsage: boolean) {
+  const trimmedName = name.trim();
+  if (!trimmedName) return null;
+  const normalizedName = trimmedName.toLocaleLowerCase();
+  const categoryType = transactionType === "income" ? "income" : "expense";
+  const [category] = await db.insert(categoriesTable).values({
+    profileId: userId, name: trimmedName, normalizedName, type: categoryType,
+    usageCount: incrementUsage ? 1 : 0,
+  }).onConflictDoUpdate({
+    target: [categoriesTable.profileId, categoriesTable.normalizedName, categoriesTable.type],
+    set: {
+      name: trimmedName,
+      ...(incrementUsage ? { usageCount: sql`${categoriesTable.usageCount} + 1` } : {}),
+    },
+  }).returning({ id: categoriesTable.id });
+  return category.id;
+}
+
 function serializeTransaction(t: typeof transactionsTable.$inferSelect) {
   return {
     id: t.id,
@@ -90,18 +108,7 @@ router.post("/transactions", requireAuth, async (req, res): Promise<void> => {
     limit: 1,
   });
   if (!ownedAccount) { res.status(404).json({ error: "Account not found" }); return; }
-  const normalizedCategory = data.category?.trim().toLocaleLowerCase() ?? null;
-  let categoryId: number | null = null;
-  if (normalizedCategory) {
-    const [category] = await db.insert(categoriesTable).values({
-      profileId: userId, name: data.category!.trim(), normalizedName: normalizedCategory,
-      type: data.type === "income" ? "income" : "expense", usageCount: 0,
-    }).onConflictDoUpdate({
-      target: [categoriesTable.profileId, categoriesTable.normalizedName, categoriesTable.type],
-      set: { name: data.category!.trim() },
-    }).returning({ id: categoriesTable.id });
-    categoryId = category.id;
-  }
+  const categoryId = data.category ? await upsertTransactionCategory(userId, data.category, data.type, true) : null;
   const [transaction] = await db.insert(transactionsTable).values({
     profileId: userId,
     accountId,
@@ -126,27 +133,6 @@ router.post("/transactions", requireAuth, async (req, res): Promise<void> => {
     status: ["pending", "cleared"].includes(req.body?.status) ? req.body.status : "cleared",
     merchant: typeof req.body?.merchant === "string" ? req.body.merchant.trim() || null : null,
   }).returning();
-
-  // Auto-upsert category per user (no unique constraint, do manual check)
-  if (data.category) {
-    const [existing] = await db.select()
-      .from(categoriesTable)
-      .where(and(eq(categoriesTable.name, data.category), eq(categoriesTable.profileId, userId)))
-      .limit(1);
-    if (existing) {
-      await db.update(categoriesTable)
-        .set({ usageCount: sql`${categoriesTable.usageCount} + 1` })
-        .where(eq(categoriesTable.id, existing.id));
-    } else {
-      await db.insert(categoriesTable).values({
-        profileId: userId,
-        name: data.category,
-        normalizedName: normalizedCategory!,
-        type: data.type === "income" ? "income" : "expense",
-        usageCount: 1,
-      }).onConflictDoNothing();
-    }
-  }
 
   await writeAudit(req, "create", "transaction", transaction.id, null, transaction);
   res.status(201).json(serializeTransaction(transaction));
@@ -198,6 +184,11 @@ router.patch("/transactions/:id", requireAuth, async (req, res): Promise<void> =
   if (data.taxDeductible != null) updates.taxDeductible = data.taxDeductible;
   if (req.body?.status != null && ["pending", "cleared", "reconciled", "void"].includes(req.body.status)) updates.status = req.body.status;
   if (Object.prototype.hasOwnProperty.call(req.body, "merchant")) updates.merchant = req.body.merchant || null;
+  if (Object.prototype.hasOwnProperty.call(req.body, "category") || data.type != null) {
+    const nextCategory = Object.prototype.hasOwnProperty.call(req.body, "category") ? data.category : before.category;
+    const nextType = data.type ?? before.type;
+    updates.categoryId = nextCategory ? await upsertTransactionCategory(req.user!.userId, nextCategory, nextType, false) : null;
+  }
   updates.version = sql`${transactionsTable.version} + 1`;
 
   const [transaction] = await db.update(transactionsTable).set(updates)

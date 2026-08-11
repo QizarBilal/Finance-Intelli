@@ -1,4 +1,3 @@
-import { useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { 
   useGetDashboardSummary, 
@@ -35,7 +34,12 @@ export default function Dashboard() {
     return 'Good evening';
   };
 
-  const trendData = trends || [];
+  const trendData = (trends || []).map(point => ({
+    ...point,
+    income: Number(point.income) || 0,
+    expense: Number(point.expense) || 0,
+    savings: Number(point.savings) || 0,
+  })).filter(point => /^\d{4}-\d{2}-\d{2}$/.test(point.date));
 
   return (
     <div className="space-y-8 pb-10">
@@ -256,7 +260,7 @@ function MetricCard({ title, value, isLoading, icon: Icon, trend, trendUp, prima
           <div className={`h-8 w-32 rounded animate-pulse ${primary ? 'bg-white/20' : 'bg-muted'}`}></div>
         ) : (
           <div className="text-3xl font-display font-bold tracking-tight">
-            {value !== undefined ? formatCurrency(value) : '--'}
+            {Number.isFinite(Number(value)) ? formatCurrency(Number(value)) : '--'}
           </div>
         )}
       </div>

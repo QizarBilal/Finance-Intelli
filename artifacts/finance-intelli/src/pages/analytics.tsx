@@ -21,8 +21,12 @@ export default function Analytics() {
   const { data: catExpenses } = useGetAnalyticsCategories({ period, type: 'expense' });
   const { data: summary } = useGetDashboardSummary();
 
-  const trendData = trends || [];
-  const categoryData = catExpenses || [];
+  const trendData = (trends || []).map(point => ({
+    ...point, income: Number(point.income) || 0, expense: Number(point.expense) || 0, savings: Number(point.savings) || 0,
+  })).filter(point => /^\d{4}-\d{2}-\d{2}$/.test(point.date));
+  const categoryData = (catExpenses || []).map(category => ({ ...category, amount: Number(category.amount) || 0 })).filter(category => category.amount > 0);
+  const compactCurrency = (value: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', notation: 'compact', maximumFractionDigits: 1 }).format(Number(value) || 0);
+  const dateLabel = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString('en-IN', period === '12m' ? { month: 'short' } : { day: 'numeric', month: 'short' });
 
   return (
     <div className="space-y-8 pb-10">
@@ -69,19 +73,19 @@ export default function Analytics() {
                     axisLine={false} 
                     tickLine={false} 
                     tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
-                    tickFormatter={(val) => period === '12m' ? new Date(val).toLocaleString('default', { month: 'short' }) : new Date(val).getDate().toString()}
+                    tickFormatter={dateLabel}
                   />
                   <YAxis 
                     axisLine={false} 
                     tickLine={false} 
                     tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
-                    tickFormatter={(val) => `₹${val/1000}k`}
-                    width={50}
+                    tickFormatter={compactCurrency}
+                    width={72}
                   />
                   <Tooltip 
                     contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                     formatter={(value: number) => formatCurrency(value)}
-                    labelFormatter={(label) => formatDate(label)}
+                    labelFormatter={(label) => dateLabel(String(label))}
                   />
                   <Legend />
                   <Area type="monotone" dataKey="income" name="Income" stroke="hsl(var(--primary))" fill="url(#colorInc)" strokeWidth={2} />
@@ -158,14 +162,14 @@ export default function Analytics() {
                     axisLine={false} 
                     tickLine={false} 
                     tick={{ fontSize: 12, fill: 'hsl(var(--muted-foreground))' }}
-                    tickFormatter={(val) => period === '12m' ? new Date(val).toLocaleString('default', { month: 'short' }) : new Date(val).getDate().toString()}
+                    tickFormatter={dateLabel}
                   />
                   <Tooltip 
                     cursor={{ fill: 'hsl(var(--muted)/0.3)' }}
                     contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                     formatter={(value: number) => formatCurrency(value)}
                   />
-                  <Bar dataKey="savings" name="Net Saved" fill="hsl(var(--primary))" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="savings" name="Net Saved" radius={[4, 4, 0, 0]}>{trendData.map((point, index) => <Cell key={index} fill={point.savings >= 0 ? 'hsl(var(--primary))' : 'hsl(var(--destructive))'} />)}</Bar>
                 </BarChart>
               </ResponsiveContainer>
             ) : (
