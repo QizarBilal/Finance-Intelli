@@ -82,10 +82,29 @@ export async function getCollection<T extends Document = FinanceDocument>(
 }
 
 export async function nextId(name: CollectionName, session?: ClientSession): Promise<number> {
-  const counters = (await getDatabase()).collection<{ _id: string; value: number }>("counters");
+  const database = await getDatabase();
+  const counters = database.collection<{ _id: string; value: number }>("counters");
+  const latestDocument = await database
+    .collection(name)
+    .find({}, { projection: { id: 1 }, session })
+    .sort({ id: -1 })
+    .limit(1)
+    .next();
+  const highestExistingId = typeof latestDocument?.id === "number" ? latestDocument.id : 0;
   const result = await counters.findOneAndUpdate(
     { _id: name },
-    { $inc: { value: 1 } },
+    [
+      {
+        $set: {
+          value: {
+            $add: [
+              { $max: [{ $ifNull: ["$value", 0] }, highestExistingId] },
+              1,
+            ],
+          },
+        },
+      },
+    ],
     { upsert: true, returnDocument: "after", session },
   );
   if (!result) throw new Error(`Unable to allocate an id for ${name}`);
@@ -121,3 +140,4 @@ export async function withMongoTransaction<T>(
 export async function mongoHealthcheck(): Promise<void> {
   await (await getDatabase()).command({ ping: 1 });
 }
+
