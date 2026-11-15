@@ -3,7 +3,7 @@ import { Sparkles, AlertTriangle, Lightbulb, TrendingUp, CheckCircle2 } from 'lu
 import { formatCurrency } from '@/lib/utils';
 
 export default function Insights() {
-  const { data: insights, isLoading } = useGetInsights();
+  const { data: insights, isLoading, isError } = useGetInsights();
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -25,12 +25,18 @@ export default function Insights() {
     <div className="max-w-4xl space-y-8">
       <div>
         <h1 className="text-3xl font-display font-bold tracking-tight flex items-center gap-3">
-          <Sparkles className="w-8 h-8 text-primary" /> 
-          AI Insights
+          <Sparkles className="w-8 h-8 text-primary" />
+          Financial Insights
         </h1>
         <p className="text-muted-foreground mt-2">
-          Your private banker is analyzing your data. Here's what we found.
+          Practical signals from your ledger, budgets, and spending patterns.
         </p>
+      </div>
+
+      <div className="grid gap-3 rounded-2xl border border-border/60 bg-card/40 p-4 text-xs text-muted-foreground sm:grid-cols-3">
+        <p><span className="font-semibold text-foreground">Fair comparisons</span><br />Month-to-date spending is compared with the same number of days last month.</p>
+        <p><span className="font-semibold text-foreground">Currency aware</span><br />Accounts in different currencies are analyzed separately, without guessed exchange rates.</p>
+        <p><span className="font-semibold text-foreground">Actionable signals</span><br />Budget pressure, savings rate, and uncategorized spending are prioritized by urgency.</p>
       </div>
 
       {isLoading ? (
@@ -39,11 +45,17 @@ export default function Insights() {
             <div key={i} className="h-32 glass-card rounded-2xl animate-pulse bg-muted/50" />
           ))}
         </div>
+      ) : isError ? (
+        <div role="alert" className="glass-card rounded-2xl border border-destructive/20 p-6">
+          <h3 className="font-semibold">Insights are temporarily unavailable</h3>
+          <p className="mt-1 text-sm text-muted-foreground">Your financial records are unchanged. Refresh this page in a moment to try again.</p>
+        </div>
       ) : insights && insights.length > 0 ? (
         <div className="space-y-4">
           {insights.map((insight) => {
             const Icon = getIcon(insight.type);
             const colorClass = getColor(insight.severity, insight.type);
+            const currency = (insight as typeof insight & { currency?: string }).currency || 'INR';
             
             return (
               <div key={insight.id} className="glass-card rounded-2xl p-6 flex gap-6 relative overflow-hidden transition-all hover:bg-white/5 border border-border/50">
@@ -54,11 +66,12 @@ export default function Insights() {
                   <h3 className="text-lg font-semibold text-foreground mb-1">{insight.title}</h3>
                   <p className="text-muted-foreground text-sm leading-relaxed max-w-2xl">{insight.description}</p>
                   
-                  {insight.amount && (
+                  {insight.amount != null && insight.amount > 0 && (
                     <div className="mt-4 inline-flex items-center px-3 py-1 rounded-full bg-background border border-border text-sm font-mono font-medium">
-                      Impact: {formatCurrency(insight.amount)}
+                      {insight.type === 'warning' ? 'Amount at risk' : 'To review'}: {formatCurrency(insight.amount, currency)}
                     </div>
                   )}
+                  {insight.trend && <span className="mt-4 ml-2 inline-flex rounded-full bg-muted px-3 py-1 text-xs font-medium text-muted-foreground">{insight.trend}</span>}
                 </div>
               </div>
             );

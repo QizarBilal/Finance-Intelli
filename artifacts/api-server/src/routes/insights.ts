@@ -1,110 +1,207 @@
 import { Router } from "express";
 import { collections, getCollection } from "@workspace/db";
 import { requireAuth } from "../middlewares/auth";
+import { dateString, zonedDateParts } from "../lib/dates";
 import {
   resolveBudgetCategory,
   sumExpensesForCategory,
 } from "../lib/budgeting";
+
 const router = Router();
+const active = { $in: [null, undefined] };
+
+type MoneyTotals = { income: number; expenses: number };
+type Insight = {
+  id: string;
+  type: "warning" | "success" | "tip" | "info";
+  title: string;
+  description: string;
+  severity: "high" | "medium" | "low";
+  category: string | null;
+  amount: number | null;
+  currency: string;
+  trend: string | null;
+};
+
 router.get("/insights", requireAuth, async (req, res) => {
-  const now = new Date(),
-    month = (d: Date) =>
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-  const current = month(now),
-    previous = month(new Date(now.getFullYear(), now.getMonth() - 1, 1));
-  const txs: any[] = await (
-    await getCollection(collections.transactions)
-  )
+  const userId = req.user!.userId;
+  const now = new Date();
+  const profiles = await getCollection(collections.profiles);
+  const profile: any = await profiles.findOne({ id: userId });
+  const timeZone = profile?.timezone ?? "UTC";
+  const todayParts = zonedDateParts(now, timeZone);
+  const today = dateString(todayParts);
+  const currentMonthStart = dateString({ ...todayParts, day: 1 });
+  const previousMonthStartDate = new Date(
+    Date.UTC(todayParts.year, todayParts.month - 2, 1, 12),
+  );
+  const previousMonthStart = dateString({
+    year: previousMonthStartDate.getUTCFullYear(),
+    month: previousMonthStartDate.getUTCMonth() + 1,
+    day: 1,
+  });
+  const previousMonthLastDay = new Date(
+    Date.UTC(todayParts.year, todayParts.month - 1, 0),
+  ).getUTCDate();
+  const comparisonDay = Math.min(todayParts.day, previousMonthLastDay);
+  const previousMonthThrough = dateString({
+    year: previousMonthStartDate.getUTCFullYear(),
+    month: previousMonthStartDate.getUTCMonth() + 1,
+    day: comparisonDay,
+  });
+
+  const [accounts, transactions, budgets] = await Promise.all([
+    getCollection(collections.accounts),
+    getCollection(collections.transactions),
+    getCollection(collections.budgets),
+  ]);
+  const accountRows = await accounts
+    .find({ profileId: userId })
+    .project({ id: 1, currency: 1 })
+    .toArray();
+  const currencyByAccount = new Map(
+    accountRows.map((account: any) => [Number(account.id), String(account.currency || "INR").toUpperCase()]),
+  );
+  const rows: any[] = await transactions
     .find({
-      profileId: req.user!.userId,
-      deletedAt: null,
+      profileId: userId,
+      deletedAt: active,
       status: { $ne: "void" },
-      date: { $gte: `${previous}-01` },
+      date: { $gte: previousMonthStart, $lte: today },
+      type: { $in: ["income", "expense"] },
     })
     .toArray();
-  const expense = (m: string) =>
-    txs
-      .filter((t) => t.type === "expense" && String(t.date).startsWith(m))
-      .reduce((s, t) => s + Number(t.amount), 0);
-  const thisExpense = expense(current),
-    lastExpense = expense(previous),
-    insights: any[] = [];
-  if (lastExpense > 0 && thisExpense > lastExpense * 1.2) {
-    const increase = Math.round(
-      ((thisExpense - lastExpense) / lastExpense) * 100,
-    );
-    insights.push({
-      id: "spending-increase",
-      type: "warning",
-      title: "Spending Up This Month",
-      description: `Your expenses this month are ${increase}% higher than last month.`,
-      severity: increase > 50 ? "high" : "medium",
-      category: null,
-      amount: thisExpense - lastExpense,
-      trend: `+${increase}%`,
-    });
+
+  const totals = new Map<string, { current: MoneyTotals; previous: MoneyTotals }>();
+  const thisMonthRows = new Map<string, any[]>();
+  const availableCategories = rows.map((row) => row.category).filter(Boolean);
+  for (const row of rows) {
+    const currency = currencyByAccount.get(Number(row.accountId)) || "INR";
+    const bucket = totals.get(currency) ?? {
+      current: { income: 0, expenses: 0 },
+      previous: { income: 0, expenses: 0 },
+    };
+    const inCurrent = row.date >= currentMonthStart && row.date <= today;
+    const inPreviousComparable = row.date >= previousMonthStart && row.date <= previousMonthThrough;
+    const amount = Number(row.amount);
+    if (!Number.isFinite(amount) || amount <= 0) continue;
+    if (inCurrent) {
+      bucket.current[row.type === "income" ? "income" : "expenses"] += amount;
+      const list = thisMonthRows.get(currency) ?? [];
+      list.push(row);
+      thisMonthRows.set(currency, list);
+    } else if (inPreviousComparable) {
+      bucket.previous[row.type === "income" ? "income" : "expenses"] += amount;
+    }
+    totals.set(currency, bucket);
   }
-  const currentExpenses = txs.filter(
-    (t) => t.type === "expense" && String(t.date).startsWith(current),
-  );
-  const availableCategories = txs
-    .map((transaction) => transaction.category)
-    .filter(Boolean);
-  const budgets: any[] = await (
-    await getCollection(collections.budgets)
-  )
-    .find({ profileId: req.user!.userId })
+
+  const budgetRows: any[] = await budgets
+    .find({ profileId: userId, archivedAt: active })
     .toArray();
-  for (const b of budgets.filter((b) => b.period === "monthly")) {
-    const category = resolveBudgetCategory(b, availableCategories),
-      used = sumExpensesForCategory(currentExpenses, category),
-      limit = Number(b.limitAmount ?? b.amount ?? 0),
-      pct = limit ? Math.round((used / limit) * 100) : 0;
-    if (pct >= 80)
+  const insights: Insight[] = [];
+  const currencies = new Set([...totals.keys(), ...budgetRows.map((item) => String(item.currency || "INR").toUpperCase())]);
+
+  for (const currency of currencies) {
+    const bucket = totals.get(currency) ?? {
+      current: { income: 0, expenses: 0 },
+      previous: { income: 0, expenses: 0 },
+    };
+    const currentRows = thisMonthRows.get(currency) ?? [];
+    const currentExpense = bucket.current.expenses;
+    const priorExpense = bucket.previous.expenses;
+    const priorIncome = bucket.previous.income;
+    const currentIncome = bucket.current.income;
+
+    if (priorExpense > 0 && currentExpense > priorExpense * 1.2) {
+      const increase = Math.round(((currentExpense - priorExpense) / priorExpense) * 100);
       insights.push({
-        id: `budget-${b.id}`,
+        id: `spending-increase-${currency}`,
         type: "warning",
-        title:
-          pct > 100
-            ? `Budget Exceeded: ${b.name}`
-            : `Approaching Budget Limit: ${b.name}`,
-        description:
-          pct > 100
-            ? `You have exceeded this budget by ₹${Math.round(used - limit).toLocaleString("en-IN")}.`
-            : `You've used ${pct}% of this budget.`,
-        severity: pct > 100 ? "high" : "medium",
-        category,
-        amount: pct > 100 ? used - limit : null,
-        trend: `${pct}% used`,
+        title: `Spending is up · ${currency}`,
+        description: `You have spent ${increase}% more than the same number of days last month (${today} vs ${previousMonthThrough}).`,
+        severity: increase > 50 ? "high" : "medium",
+        category: null,
+        amount: currentExpense - priorExpense,
+        currency,
+        trend: `+${increase}% month to date`,
       });
+    }
+
+    for (const budget of budgetRows.filter((item) => item.period === "monthly" && String(item.currency || "INR").toUpperCase() === currency)) {
+      const category = resolveBudgetCategory(budget, availableCategories);
+      const used = sumExpensesForCategory(currentRows, category);
+      const limit = Number(budget.limitAmount ?? budget.amount ?? 0);
+      const percent = limit > 0 ? Math.round((used / limit) * 100) : 0;
+      if (percent >= 80) {
+        const exceeded = percent > 100;
+        insights.push({
+          id: `budget-${budget.id}-${currency}`,
+          type: "warning",
+          title: exceeded ? `Budget exceeded · ${budget.name}` : `Budget nearly reached · ${budget.name}`,
+          description: exceeded
+            ? `Spending is ${percent}% of this ${currency} limit, exceeding it by ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(used - limit)} ${currency}.`
+            : `You have used ${percent}% of this ${currency} budget so far this month.`,
+          severity: exceeded ? "high" : "medium",
+          category,
+          amount: exceeded ? used - limit : used,
+          currency,
+          trend: `${percent}% of limit`,
+        });
+      }
+    }
+
+    if (currentIncome > 0) {
+      const savingsRate = ((currentIncome - currentExpense) / currentIncome) * 100;
+      if (savingsRate < 10) {
+        insights.push({
+          id: `low-savings-rate-${currency}`,
+          type: "warning",
+          title: `Savings rate needs attention · ${currency}`,
+          description: `Your month-to-date savings rate is ${Math.round(savingsRate)}%. Review flexible spending and upcoming commitments.`,
+          severity: savingsRate < 0 ? "high" : "medium",
+          category: null,
+          amount: Math.max(0, currentExpense - currentIncome),
+          currency,
+          trend: `${Math.round(savingsRate)}% saved`,
+        });
+      }
+    }
+
+    const uncategorized = currentRows.filter((row) => row.type === "expense" && !String(row.category ?? "").trim());
+    const uncategorizedAmount = uncategorized.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    if (uncategorized.length >= 3) {
+      insights.push({
+        id: `uncategorized-${currency}`,
+        type: "tip",
+        title: `Categorize recent spending · ${currency}`,
+        description: `${uncategorized.length} expenses totaling ${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(uncategorizedAmount)} ${currency} have no category. Categorizing them improves budgets and reports.`,
+        severity: "low",
+        category: null,
+        amount: uncategorizedAmount,
+        currency,
+        trend: `${uncategorized.length} to review`,
+      });
+    }
   }
-  const income = txs
-      .filter((t) => t.type === "income" && String(t.date).startsWith(current))
-      .reduce((s, t) => s + Number(t.amount), 0),
-    rate = income > 0 ? (income - thisExpense) / income : 0;
-  if (income > 0 && rate < 0.1)
+
+  if (!insights.length) {
     insights.push({
-      id: "low-savings-rate",
-      type: "warning",
-      title: "Low Savings Rate",
-      description: "You're saving less than 10% of your income this month.",
-      severity: "high",
-      category: null,
-      amount: null,
-      trend: `${Math.round(rate * 100)}% saved`,
-    });
-  if (!insights.length)
-    insights.push({
-      id: "getting-started",
+      id: "steady-finances",
       type: "info",
-      title: "Your Finances Look Steady",
-      description:
-        "Keep tracking transactions to unlock more personalized spending and budget insights.",
+      title: "No urgent signals right now",
+      description: "We compare like-for-like month-to-date spending, respect account currencies, and review your active monthly budgets. Keep imports and categories up to date for more useful guidance.",
       severity: "low",
       category: null,
       amount: null,
+      currency: "INR",
       trend: null,
     });
+  }
+
+  const severityOrder = { high: 0, medium: 1, low: 2 };
+  insights.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
   res.json(insights);
 });
+
 export default router;
