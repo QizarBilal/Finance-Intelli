@@ -18,6 +18,7 @@ const sections = [
       { href: '/budgets',      label: 'Budgets',      icon: PieChart },
       { href: '/giving',       label: 'Giving',       icon: Heart },
       { href: '/goals',        label: 'Goals',        icon: Target },
+      { href: '/notifications', label: 'Notifications', icon: Bell },
     ]
   },
   {

@@ -51,6 +51,8 @@ export const collections = {
   monthlyReviews: "reviews",
   notificationPreferences: "notification-preferences",
   notifications: "notifications",
+  pushSubscriptions: "push-subscriptions",
+  signupRequests: "signup-requests",
   profiles: "profiles",
   receipts: "receipts",
   reconciliations: "reconciliations",

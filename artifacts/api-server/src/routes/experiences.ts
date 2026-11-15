@@ -10,6 +10,7 @@ import {
 import { requireAuth } from "../middlewares/auth";
 import { getAccountBalance } from "../lib/accounts";
 import { writeAudit } from "../lib/audit";
+import { notifyUserOnce, pushConfigured } from "../lib/notifications";
 import { periodRange } from "../lib/dates";
 const router = Router(),
   clean = (v: unknown) => (typeof v === "string" ? v.trim() : ""),
@@ -66,9 +67,6 @@ router.get("/command-center", requireAuth, async (req, res) => {
     subs = await (
       await getCollection(collections.subscriptions)
     ).countDocuments({ profileId: id, status: "active" }),
-    unread = await (
-      await getCollection(collections.notifications)
-    ).countDocuments({ profileId: id, readAt: null }),
     balances: any[] = await Promise.all(
       accounts.map(async (a) => ({
         ...withoutMongoId(a),
@@ -136,11 +134,16 @@ router.get("/command-center", requireAuth, async (req, res) => {
       .map((a) => ({
         id: `account-${a.id}`,
         priority: "urgent",
-        title: `${a.name} is below zero`,
-        detail: "Review recent activity",
+        title: `${a.name} balance is low`,
+        detail: `Below your ${Number(alertPrefs?.lowBalanceThreshold ?? 500).toFixed(2)} alert threshold`,
         href: "/accounts",
       })),
   ].slice(0, 12);
+  for (const task of tasks) {
+    const periodKey = task.id.startsWith("budget-") ? `:${monthStart()}` : task.id.startsWith("reminder-") ? `:${due.find(reminder => task.id === `reminder-${reminder.id}`)?.dueDate ?? today()}` : "";
+    await notifyUserOnce(id, `${task.id}${periodKey}`, task.title, task.detail, task.href);
+  }
+  const unread = await (await getCollection(collections.notifications)).countDocuments({ profileId: id, readAt: null });
   res.json({
     tasks,
     balances,
@@ -761,6 +764,8 @@ router.post("/dashboard-layouts", requireAuth, async (req, res) => {
   res.status(201).json(withoutMongoId(row));
 });
 router.get("/notifications", requireAuth, async (req, res) => {
+  const notificationCollection = await getCollection(collections.notifications);
+  await notificationCollection.createIndex({ profileId: 1, createdAt: -1 }, { name: "profile_notifications_recent" });
   const items = await list(collections.notifications, req.user!.userId),
     preferences = await (
       await getCollection(collections.notificationPreferences)
@@ -769,6 +774,29 @@ router.get("/notifications", requireAuth, async (req, res) => {
     items: items.slice(0, 100),
     preferences: withoutMongoId(preferences),
   });
+});
+router.get("/push/public-key", requireAuth, async (_req, res) => res.json({ enabled: pushConfigured(), publicKey: process.env.VAPID_PUBLIC_KEY ?? null }));
+router.post("/push/subscriptions", requireAuth, async (req, res) => {
+  if (!pushConfigured()) { res.status(503).json({ error: "Browser notifications are not configured yet." }); return; }
+  const sub = req.body;
+  let endpoint: URL | null = null;
+  try { endpoint = new URL(sub?.endpoint); } catch { endpoint = null; }
+  const host = endpoint?.hostname.toLowerCase() ?? "";
+  const trustedPushHost = host === "fcm.googleapis.com" || host === "updates.push.services.mozilla.com" || host === "push.services.mozilla.com" || host.endsWith(".push.apple.com") || host.endsWith(".notify.windows.com");
+  if (!endpoint || endpoint.protocol !== "https:" || endpoint.port || endpoint.username || endpoint.password || endpoint.href.length > 2048 || !trustedPushHost || typeof sub?.keys?.p256dh !== "string" || !/^[A-Za-z0-9_-]{40,200}$/.test(sub.keys.p256dh) || typeof sub?.keys?.auth !== "string" || !/^[A-Za-z0-9_-]{10,100}$/.test(sub.keys.auth)) {
+    res.status(400).json({ error: "Invalid browser notification subscription." }); return;
+  }
+  const col = await getCollection(collections.pushSubscriptions);
+  await col.createIndex({ endpoint: 1 }, { unique: true });
+  const now = new Date(), key = { endpoint: sub.endpoint };
+  await col.updateOne(key, { $set: { profileId: req.user!.userId, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, updatedAt: now }, $setOnInsert: { id: await nextId(collections.pushSubscriptions), createdAt: now } }, { upsert: true });
+  res.status(201).json({ enabled: true });
+});
+router.delete("/push/subscriptions", requireAuth, async (req, res) => {
+  const endpoint = typeof req.body?.endpoint === "string" ? req.body.endpoint : "";
+  if (!endpoint.startsWith("https://")) { res.status(400).json({ error: "Invalid subscription endpoint." }); return; }
+  await (await getCollection(collections.pushSubscriptions)).deleteOne({ endpoint, profileId: req.user!.userId });
+  res.sendStatus(204);
 });
 router.put("/notification-preferences", requireAuth, async (req, res) => {
   const col = await getCollection(collections.notificationPreferences),
@@ -809,6 +837,11 @@ router.patch("/notifications/:id/read", requireAuth, async (req, res) => {
     return;
   }
   res.json(withoutMongoId(row));
+});
+router.post("/notifications/read-all", requireAuth, async (req, res) => {
+  const now = new Date();
+  const result = await (await getCollection(collections.notifications)).updateMany({ profileId: req.user!.userId, readAt: null }, { $set: { readAt: now, updatedAt: now } });
+  res.json({ updated: result.modifiedCount });
 });
 router.get("/search", requireAuth, async (req, res) => {
   const q = clean(req.query.q);

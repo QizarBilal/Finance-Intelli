@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLogout, useGetMe, useUpdateProfile } from '@workspace/api-client-react';
 import { clearToken } from '@/lib/api-client';
 import { useLocation } from 'wouter';
-import { LogOut, User, Palette, Database, RotateCcw, AlertTriangle, Download, Loader2, Check, BellRing } from 'lucide-react';
+import { LogOut, User, Palette, Database, RotateCcw, AlertTriangle, Download, Loader2, Check, BellRing, Smartphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -31,10 +31,35 @@ export default function Settings() {
   const { data: profile } = useGetMe();
   const updateProfile = useUpdateProfile();
   const alerts = useQuery({ queryKey: ['notification-preferences'], queryFn: () => customFetch<{ preferences?: AlertPreferences }>('/api/notifications', { responseType: 'json' }) });
+  const pushSettings = useQuery({ queryKey: ['push-public-key'], queryFn: () => customFetch<{ enabled: boolean; publicKey: string | null }>('/api/push/public-key', { responseType: 'json' }) });
+  const [pushBusy, setPushBusy] = useState(false);
   const saveAlerts = useMutation({ mutationFn: (preferences: AlertPreferences) => customFetch<AlertPreferences>('/api/notification-preferences', { method: 'PUT', responseType: 'json', body: JSON.stringify(preferences) }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['notification-preferences'] }); queryClient.invalidateQueries({ queryKey: ['command-center'] }); toast({ title: 'Alert preferences saved' }); }, onError: (error: Error) => toast({ title: 'Could not save alert preferences', description: error.message, variant: 'destructive' }) });
   const setAlert = (key: keyof AlertPreferences, value: boolean | number) => {
     const current = alerts.data?.preferences ?? {};
     saveAlerts.mutate({ lowBalance: current.lowBalance !== false, bills: current.bills !== false, budgets: current.budgets !== false, subscriptions: current.subscriptions !== false, lowBalanceThreshold: Number(current.lowBalanceThreshold ?? 500), [key]: value });
+  };
+  const togglePush = async () => {
+    setPushBusy(true);
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) throw new Error('This browser does not support push notifications.');
+      const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+      const registration = await navigator.serviceWorker.register(`${base}/sw.js`);
+      let subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await customFetch('/api/push/subscriptions', { method: 'DELETE', responseType: 'json', body: JSON.stringify({ endpoint: subscription.endpoint }) });
+        await subscription.unsubscribe();
+        toast({ title: 'Browser notifications turned off' });
+      } else {
+        if (!pushSettings.data?.enabled || !pushSettings.data.publicKey) throw new Error('Browser notifications are temporarily unavailable. Contact the workspace owner.');
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') throw new Error('Allow notifications in your browser to turn them on.');
+        const applicationServerKey = Uint8Array.from(atob(pushSettings.data.publicKey.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+        subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+        await customFetch('/api/push/subscriptions', { method: 'POST', responseType: 'json', body: JSON.stringify(subscription.toJSON()) });
+        toast({ title: 'Browser notifications turned on', description: 'Important account updates can now reach this browser.' });
+      }
+    } catch (error) { toast({ title: 'Notification setting could not be changed', description: error instanceof Error ? error.message : 'Try again.', variant: 'destructive' }); }
+    finally { setPushBusy(false); }
   };
 
   const [isResetting, setIsResetting] = useState(false);
@@ -177,6 +202,13 @@ export default function Settings() {
           </div>
         </div>
 
+        {/* Browser push */}
+        <div className="p-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center gap-4"><div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10"><Smartphone className="h-5 w-5 text-primary" /></div><div><h3 className="text-lg font-medium">Browser notifications</h3><p className="text-sm text-muted-foreground">Receive important updates on this device after you allow them.</p></div></div>
+          <Button variant="outline" onClick={togglePush} disabled={pushBusy || pushSettings.isLoading || !pushSettings.data?.enabled}>{pushBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <BellRing className="mr-2 h-4 w-4"/>}{typeof Notification !== 'undefined' && Notification.permission === 'granted' ? 'Manage on this browser' : 'Enable on this browser'}</Button>
+          {!pushSettings.data?.enabled && !pushSettings.isLoading && <p className="text-xs text-muted-foreground sm:max-w-xs">Push delivery is awaiting secure server configuration.</p>}
+        </div>
+
         {/* Export */}
         <div className="p-6 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -301,7 +333,7 @@ export default function Settings() {
                 id="edit-name"
                 value={editName}
                 onChange={e => setEditName(e.target.value)}
-                placeholder="Mohammed Qizar Bilal"
+                placeholder="Enter your name"
                 className="bg-background/50"
               />
             </div>

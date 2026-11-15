@@ -9,6 +9,7 @@ import Shell from '@/components/layout/Shell';
 
 const Dashboard = lazy(() => import('@/pages/dashboard'));
 const Signup = lazy(() => import('@/pages/signup'));
+const Approval = lazy(() => import('@/pages/approval'));
 const Login = lazy(() => import('@/pages/login'));
 const Transactions = lazy(() => import('@/pages/transactions'));
 const Budgets = lazy(() => import('@/pages/budgets'));
@@ -19,6 +20,7 @@ const Reminders = lazy(() => import('@/pages/reminders'));
 const Analytics = lazy(() => import('@/pages/analytics'));
 const Reports = lazy(() => import('@/pages/reports'));
 const Settings = lazy(() => import('@/pages/settings'));
+const Notifications = lazy(() => import('@/pages/notifications'));
 const Insights = lazy(() => import('@/pages/insights'));
 const Accounts = lazy(() => import('@/pages/accounts'));
 const Plan = lazy(() => import('@/pages/plan'));
@@ -97,6 +99,7 @@ function MainApp() {
         <Route path="/analytics" component={Analytics} />
         <Route path="/reports" component={Reports} />
         <Route path="/settings" component={Settings} />
+        <Route path="/notifications" component={Notifications} />
         <Route path="/insights" component={Insights} />
         <Route component={NotFound} />
       </Switch>
@@ -114,6 +117,7 @@ function Router() {
       <Route path="/signup">
         <AuthGuard component={Signup} isPublic />
       </Route>
+      <Route path="/approval" component={Approval} />
       <Route path="/setup">
         <AuthGuard component={Signup} isPublic />
       </Route>

@@ -91,7 +91,7 @@ export default function Setup() {
                     <Label htmlFor="name">Full Name</Label>
                     <Input 
                       id="name" 
-                      placeholder="e.g. Mohammed Qizar Bilal" 
+                      placeholder="e.g. Alex Morgan"
                       value={formData.name}
                       onChange={e => setFormData(p => ({ ...p, name: e.target.value }))}
                       className="bg-background/50"

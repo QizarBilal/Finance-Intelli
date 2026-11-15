@@ -33,6 +33,12 @@ Finance Intelli is a full-stack personal finance operating system for tracking a
 
 ## ◈ Product tour
 
+### Controlled signup and notifications
+
+New signups first confirm their email, then the workspace owner receives one-use approve/reject links at **bilalqizar@gmail.com**. Only owner approval creates a profile; rejected and expired requests have their password hash erased. Requests are rate-limited and time-limited, and emails never include passwords. Account decisions are also recorded in the user’s notification history. Users can optionally enable browser push from **Settings → Browser notifications**.
+
+To activate these production features, set `RESEND_API_KEY`, `RESEND_FROM_EMAIL` (a sender/domain verified with Resend), and `APP_URL` in Vercel’s server environment. Browser push additionally needs one stable VAPID key pair stored as `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`, with `VAPID_SUBJECT` set to a valid `mailto:` or HTTPS contact. Generate a pair once with `pnpm --filter @workspace/api-server exec web-push generate-vapid-keys --json`; keep the private key and Resend key out of source control and do not rotate the VAPID pair casually, since that invalidates existing browser subscriptions. Without email settings, signup requests are not retained and the user sees a clear setup error; without VAPID settings, in-app notifications continue to work and push controls remain disabled.
+
 ### Financial command dashboard
 
 Real-time financial KPIs, a 30-day cash-flow narrative, health scoring, smart insights, and recent transactions—designed to answer “How am I doing?” in seconds.

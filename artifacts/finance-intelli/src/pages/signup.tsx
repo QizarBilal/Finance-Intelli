@@ -1,28 +1,28 @@
 import { useState } from 'react';
-import { Link, useLocation } from 'wouter';
+import { Link } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useSetupProfile } from '@workspace/api-client-react';
-import { getApiErrorMessage, setToken } from '@/lib/api-client';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { getApiErrorMessage } from '@/lib/api-client';
 import { Zap, Loader2, ArrowRight, ArrowLeft, IndianRupee, User, Lock, Briefcase, CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
 
 const STEPS = ['Account', 'Profile'];
 
 export default function Signup() {
-  const [, setLocation] = useLocation();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const signupMutation = useSetupProfile();
+  const signupMutation = useMutation({ mutationFn: (data: Record<string, unknown>) => customFetch<{ message: string }>('/api/auth/signup-requests', { method: 'POST', responseType: 'json', body: JSON.stringify(data) }) });
+  const [submitted, setSubmitted] = useState(false);
   const [step, setStep] = useState(0);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [form, setForm] = useState({
     name: '',
+    email: '',
     username: '',
     password: '',
     confirmPassword: '',
@@ -38,8 +38,9 @@ export default function Signup() {
 
   const validateStep0 = () => {
     if (!form.name.trim()) return 'Full name is required.';
+    if (!/^\S+@\S+\.\S+$/.test(form.email)) return 'Enter a valid email address.';
     if (form.username.length < 3) return 'Username must be at least 3 characters.';
-    if (form.password.length < 6) return 'Password must be at least 6 characters.';
+    if (form.password.length < 10 || !/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)) return 'Use at least 10 characters with a letter and a number.';
     if (form.password !== form.confirmPassword) return 'Passwords do not match.';
     return null;
   };
@@ -54,13 +55,9 @@ export default function Signup() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     signupMutation.mutate(
-      { data: { name: form.name, username: form.username, password: form.password, occupation: form.occupation || undefined, jobStatus: form.jobStatus || undefined, currency: form.currency, currencySymbol: form.currencySymbol, theme: form.theme } },
+      { name: form.name, email: form.email, username: form.username, password: form.password, occupation: form.occupation || undefined, jobStatus: form.jobStatus || undefined, currency: form.currency, currencySymbol: form.currencySymbol, theme: form.theme },
       {
-        onSuccess: (res) => {
-          setToken(res.token);
-          queryClient.invalidateQueries();
-          setLocation('/dashboard');
-        },
+        onSuccess: () => { setForm(current => ({ ...current, password: '', confirmPassword: '' })); setSubmitted(true); },
         onError: (err: unknown) => {
           const msg = getApiErrorMessage(err, 'Something went wrong.');
           toast({ title: 'Sign up failed', description: msg, variant: 'destructive' });
@@ -88,19 +85,19 @@ export default function Signup() {
         <motion.div className="z-10 space-y-8" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.1 }}>
           <div>
             <h1 className="text-5xl font-display font-bold text-white leading-tight tracking-tight">
-              Start your<br />
+              Request access to your<br />
               <span className="text-gradient">financial OS.</span>
             </h1>
             <p className="mt-4 text-white/50 text-base leading-relaxed max-w-sm">
-              Set up your workspace in under a minute. Your data, your rules, fully private.
+              Confirm your email, then the workspace owner reviews your request. Your account is created only after approval.
             </p>
           </div>
 
           {/* Step indicators */}
           <div className="space-y-3">
             {[
-              { label: 'Create your account', desc: 'Username, password & name', icon: User },
-              { label: 'Set up your profile', desc: 'Occupation & preferences', icon: Briefcase },
+              { label: 'Submit access request', desc: 'Email confirmation & owner review', icon: User },
+              { label: 'Choose preferences', desc: 'Currency & profile details', icon: Briefcase },
             ].map((s, i) => (
               <div key={i} className={`flex items-center gap-3 transition-opacity duration-300 ${i > step ? 'opacity-30' : 'opacity-100'}`}>
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-all ${i < step ? 'bg-primary/30' : i === step ? 'bg-primary/20 ring-2 ring-primary/50' : 'bg-white/5'}`}>
@@ -117,7 +114,7 @@ export default function Signup() {
           </div>
         </motion.div>
 
-        <p className="z-10 text-white/25 text-xs">Finance Intelli · ₹ INR · Replit DB</p>
+        <p className="z-10 text-white/25 text-xs">Finance Intelli · ₹ INR · Owner reviewed access</p>
       </div>
 
       {/* ── Right form panel ── */}
@@ -133,15 +130,16 @@ export default function Signup() {
             <span className="font-display font-bold text-lg tracking-tight">Finance Intelli</span>
           </div>
 
+          {submitted ? <div className="rounded-2xl border border-primary/20 bg-card/70 p-7 text-center shadow-xl"><div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary"><CheckCircle2 className="h-7 w-7"/></div><h2 className="mt-5 text-2xl font-display font-bold">Check your inbox</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">If these details can be registered, we sent an email confirmation link. After you confirm it, the workspace owner reviews your access request and emails you with a decision.</p><p className="mt-4 rounded-xl bg-muted/50 px-4 py-3 text-xs text-muted-foreground">No account or sign-in session is created until owner approval.</p><Link href="/login" className="mt-6 inline-flex text-sm font-medium text-primary">Back to sign in</Link></div> : <>
           {/* Progress bar */}
           <div className="mb-8">
             <div className="flex items-center justify-between mb-3">
               <div>
                 <h2 className="text-2xl font-display font-bold tracking-tight">
-                  {step === 0 ? 'Create account' : 'Your profile'}
+              {step === 0 ? 'Request access' : 'Your preferences'}
                 </h2>
                 <p className="text-muted-foreground text-sm mt-0.5">
-                  {step === 0 ? 'Step 1 of 2 — credentials' : 'Step 2 of 2 — personalize'}
+                  {step === 0 ? 'Step 1 of 2 — your details' : 'Step 2 of 2 — personalize'}
                 </p>
               </div>
               <span className="text-xs text-muted-foreground/60 font-mono">{step + 1}/2</span>
@@ -159,14 +157,15 @@ export default function Signup() {
                 <div className="space-y-1.5">
                   <Label htmlFor="name">Full Name</Label>
                   <Input id="name" autoComplete="name" value={form.name} onChange={set('name')}
-                    className="h-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="Mohammed Qizar Bilal" />
+                    className="h-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="e.g. Alex Morgan" />
                 </div>
+                <div className="space-y-1.5"><Label htmlFor="email">Email address</Label><Input id="email" type="email" autoComplete="email" value={form.email} onChange={set('email')} className="h-11 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="you@example.com" /></div>
                 <div className="space-y-1.5">
                   <Label htmlFor="username">Username</Label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                     <Input id="username" autoComplete="username" value={form.username} onChange={set('username')}
-                      className="h-11 pl-9 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="qizar" />
+                      className="h-11 pl-9 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="e.g. alexm" />
                   </div>
                 </div>
                 <div className="space-y-1.5">
@@ -174,7 +173,7 @@ export default function Signup() {
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
                     <Input id="password" type={showPassword ? 'text' : 'password'} autoComplete="new-password" value={form.password} onChange={set('password')}
-                      className="h-11 pl-9 pr-10 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="min. 6 characters" />
+                    className="h-11 pl-9 pr-10 bg-card/60 border-border/60 focus-visible:ring-primary/40" placeholder="At least 10 characters" />
                     <button type="button" onClick={() => setShowPassword(value => !value)}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                       aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword}>
@@ -195,7 +194,8 @@ export default function Signup() {
                     </button>
                   </div>
                 </div>
-                <Button type="submit" className="w-full h-11 mt-2 bg-primary hover:bg-primary/90 font-semibold shadow-md shadow-primary/25 gap-2">
+              <p className="rounded-xl border border-primary/15 bg-primary/5 p-3 text-xs leading-5 text-muted-foreground">New accounts require email confirmation and approval by the workspace owner.</p>
+              <Button type="submit" className="w-full h-11 mt-2 bg-primary hover:bg-primary/90 font-semibold shadow-md shadow-primary/25 gap-2">
                   Continue <ArrowRight className="w-4 h-4" />
                 </Button>
               </motion.form>
@@ -234,8 +234,8 @@ export default function Signup() {
                   <Button type="submit" disabled={signupMutation.isPending}
                     className="flex-1 h-11 bg-primary hover:bg-primary/90 font-semibold shadow-md shadow-primary/25 gap-2">
                     {signupMutation.isPending
-                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Creating…</>
-                      : <><Zap className="w-4 h-4" /> Launch Intelli</>}
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending request…</>
+                      : <><Zap className="w-4 h-4" /> Request access</>}
                   </Button>
                 </div>
               </motion.form>
@@ -248,6 +248,7 @@ export default function Signup() {
               Sign in →
             </Link>
           </p>
+          </>}
         </div>
       </div>
     </div>
