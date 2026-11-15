@@ -19,13 +19,22 @@ import { Button } from '@/components/ui/button';
 import { Link } from 'wouter';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis } from 'recharts';
+import { useQuery } from '@tanstack/react-query';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
 
 export default function Dashboard() {
+  const accountQuery = useQuery({ queryKey: ['accounts'], queryFn: () => customFetch<Array<{ currency: string; currentBalance: number }>>('/api/accounts', { responseType: 'json' }) });
   const { data: profile } = useGetMe();
   const { data: summary, isLoading: isSummaryLoading } = useGetDashboardSummary();
   const { data: recent, isLoading: isRecentLoading } = useGetRecentTransactions({ limit: 5 });
   const { data: trends } = useGetAnalyticsTrends({ period: '30d', groupBy: 'day' });
   const { data: insights } = useGetInsights();
+  const accountBalances = (accountQuery.data ?? []).reduce<Record<string, number>>((totals, account) => {
+    const currency = account.currency || 'INR';
+    totals[currency] = (totals[currency] ?? 0) + Number(account.currentBalance || 0);
+    return totals;
+  }, {});
+  const hasMixedCurrencies = Object.keys(accountBalances).length > 1;
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -62,29 +71,32 @@ export default function Dashboard() {
       {/* Primary Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <MetricCard 
-          title="Total Balance" 
-          value={summary?.balance} 
+          title={hasMixedCurrencies ? 'Balances by currency' : 'Total Balance'}
+          value={hasMixedCurrencies ? undefined : summary?.balance}
+          balanceBreakdown={hasMixedCurrencies ? accountBalances : undefined}
           isLoading={isSummaryLoading}
           icon={Wallet}
-          trend={`${(summary as any)?.balanceTrendPercent ?? 0}% this month`}
+          trend={hasMixedCurrencies ? 'Separate balances · no FX conversion' : `${(summary as any)?.balanceTrendPercent ?? 0}% this month`}
           trendUp={((summary as any)?.balanceTrendPercent ?? 0) >= 0}
           primary
         />
         <MetricCard 
           title="Monthly Income" 
-          value={summary?.monthly?.income} 
+          value={hasMixedCurrencies ? undefined : summary?.monthly?.income}
+          displayValue={hasMixedCurrencies ? 'Multiple currencies' : undefined}
           isLoading={isSummaryLoading}
           icon={ArrowUpRight}
-          trend="vs last month"
+          trend={hasMixedCurrencies ? 'Currency totals are kept separate' : 'This month'}
           trendUp={true}
           iconClass="text-emerald-400"
         />
         <MetricCard 
           title="Monthly Expenses" 
-          value={summary?.monthly?.expense} 
+          value={hasMixedCurrencies ? undefined : summary?.monthly?.expense}
+          displayValue={hasMixedCurrencies ? 'Multiple currencies' : undefined}
           isLoading={isSummaryLoading}
           icon={ArrowDownRight}
-          trend={`${summary?.budgetUsagePercent || 0}% of budget`}
+          trend={hasMixedCurrencies ? 'Review each account currency' : `${summary?.budgetUsagePercent || 0}% of budget`}
           trendUp={false}
           iconClass="text-rose-400"
         />
@@ -102,7 +114,7 @@ export default function Dashboard() {
           </div>
           
           <div className="flex-1 min-h-[250px] w-full">
-            {trendData.length > 0 ? (
+            {hasMixedCurrencies ? <div className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">Cash-flow totals are hidden because these accounts use different currencies. Review balances by account or set a consistent currency before comparing them.</div> : trendData.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trendData} margin={{ top: 10, right: 0, left: 0, bottom: 0 }}>
                   <defs>
@@ -151,21 +163,20 @@ export default function Dashboard() {
             </div>
             <div className="flex items-end gap-4">
               <div className="text-5xl font-display font-bold text-primary">
-                {summary?.financialHealthScore ?? '--'}
+                {hasMixedCurrencies ? '—' : summary?.financialHealthScore ?? '--'}
               </div>
               <div className="pb-1 text-muted-foreground text-sm">
-                / 100
+                {hasMixedCurrencies ? 'Requires one currency' : '/ 100'}
               </div>
             </div>
-            <div className="mt-4 h-2 bg-muted rounded-full overflow-hidden">
+            {!hasMixedCurrencies && <div className="mt-4 h-2 bg-muted rounded-full overflow-hidden">
               <div 
                 className="h-full bg-primary" 
                 style={{ width: `${summary?.financialHealthScore || 0}%` }}
               />
-            </div>
-            <div className="mt-4 text-sm">
-              Savings rate: <span className="font-semibold text-foreground">{summary?.savingsRate || 0}%</span>
-            </div>
+            </div>}
+            <div className="mt-4 text-sm">{hasMixedCurrencies ? 'Choose a single reporting currency to compare income and expenses accurately.' : <>Savings rate: <span className="font-semibold text-foreground">{summary?.savingsRate || 0}%</span></>}</div>
+            {!hasMixedCurrencies && <p className="mt-2 text-[11px] text-muted-foreground">Score uses savings rate, budget usage, positive balances, and recent activity.</p>}
           </div>
 
           <div className="glass-card rounded-2xl p-6 relative overflow-hidden">
@@ -244,7 +255,7 @@ export default function Dashboard() {
   );
 }
 
-function MetricCard({ title, value, isLoading, icon: Icon, trend, trendUp, primary = false, iconClass = '' }: any) {
+function MetricCard({ title, value, displayValue, balanceBreakdown, isLoading, icon: Icon, trend, trendUp, primary = false, iconClass = '' }: any) {
   return (
     <div className={`rounded-2xl p-6 relative overflow-hidden ${primary ? 'bg-primary text-primary-foreground shadow-xl shadow-primary/20' : 'glass-card'}`}>
       <div className="flex justify-between items-start mb-4">
@@ -258,6 +269,10 @@ function MetricCard({ title, value, isLoading, icon: Icon, trend, trendUp, prima
       <div>
         {isLoading ? (
           <div className={`h-8 w-32 rounded animate-pulse ${primary ? 'bg-white/20' : 'bg-muted'}`}></div>
+        ) : balanceBreakdown ? (
+          <div className="space-y-1">{Object.entries(balanceBreakdown).map(([currency, amount]) => <p key={currency} className="font-mono text-xl font-bold">{formatCurrency(Number(amount), currency)}</p>)}</div>
+        ) : displayValue ? (
+          <div className="text-lg font-semibold">{displayValue}</div>
         ) : (
           <div className="text-3xl font-display font-bold tracking-tight">
             {Number.isFinite(Number(value)) ? formatCurrency(Number(value)) : '--'}

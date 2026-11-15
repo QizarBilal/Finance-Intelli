@@ -1,9 +1,9 @@
-import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useLogout, useGetMe, useUpdateProfile } from '@workspace/api-client-react';
 import { clearToken } from '@/lib/api-client';
 import { useLocation } from 'wouter';
-import { LogOut, User, Palette, Database, RotateCcw, AlertTriangle, Download, Loader2, Check } from 'lucide-react';
+import { LogOut, User, Palette, Database, RotateCcw, AlertTriangle, Download, Loader2, Check, BellRing } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,6 +18,10 @@ import {
 } from '@/components/ui/dialog';
 import { useToast } from '@/hooks/use-toast';
 import { appThemes, applyTheme, resolveTheme, type AppThemeId } from '@/lib/themes';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
+import { Switch } from '@/components/ui/switch';
+
+type AlertPreferences = { lowBalance?: boolean; bills?: boolean; budgets?: boolean; subscriptions?: boolean; lowBalanceThreshold?: number };
 
 export default function Settings() {
   const logout = useLogout();
@@ -26,6 +30,12 @@ export default function Settings() {
   const { toast } = useToast();
   const { data: profile } = useGetMe();
   const updateProfile = useUpdateProfile();
+  const alerts = useQuery({ queryKey: ['notification-preferences'], queryFn: () => customFetch<{ preferences?: AlertPreferences }>('/api/notifications', { responseType: 'json' }) });
+  const saveAlerts = useMutation({ mutationFn: (preferences: AlertPreferences) => customFetch<AlertPreferences>('/api/notification-preferences', { method: 'PUT', responseType: 'json', body: JSON.stringify(preferences) }), onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['notification-preferences'] }); queryClient.invalidateQueries({ queryKey: ['command-center'] }); toast({ title: 'Alert preferences saved' }); }, onError: (error: Error) => toast({ title: 'Could not save alert preferences', description: error.message, variant: 'destructive' }) });
+  const setAlert = (key: keyof AlertPreferences, value: boolean | number) => {
+    const current = alerts.data?.preferences ?? {};
+    saveAlerts.mutate({ lowBalance: current.lowBalance !== false, bills: current.bills !== false, budgets: current.budgets !== false, subscriptions: current.subscriptions !== false, lowBalanceThreshold: Number(current.lowBalanceThreshold ?? 500), [key]: value });
+  };
 
   const [isResetting, setIsResetting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -35,6 +45,8 @@ export default function Settings() {
   const [editJobStatus, setEditJobStatus] = useState('');
   const [themeOpen, setThemeOpen] = useState(false);
   const [activeTheme, setActiveTheme] = useState<AppThemeId>(() => resolveTheme());
+  const [threshold, setThreshold] = useState('500');
+  useEffect(() => { if (alerts.data?.preferences?.lowBalanceThreshold != null) setThreshold(String(alerts.data.preferences.lowBalanceThreshold)); }, [alerts.data?.preferences?.lowBalanceThreshold]);
 
   const openEdit = () => {
     setEditName(profile?.name ?? '');
@@ -64,41 +76,19 @@ export default function Settings() {
     setIsExporting(true);
     try {
       const base = import.meta.env.BASE_URL.replace(/\/$/, '');
-      const requestOptions: RequestInit = { credentials: 'include' };
-
-      const [txRes, budgetsRes, goalsRes, remindersRes, catsRes] = await Promise.all([
-        fetch(`${base}/api/transactions?limit=9999`, requestOptions),
-        fetch(`${base}/api/budgets`, requestOptions),
-        fetch(`${base}/api/goals`, requestOptions),
-        fetch(`${base}/api/reminders`, requestOptions),
-        fetch(`${base}/api/categories`, requestOptions),
-      ]);
-
-      const [txData, budgets, goals, reminders, categories] = await Promise.all([
-        txRes.json(), budgetsRes.json(), goalsRes.json(), remindersRes.json(), catsRes.json(),
-      ]);
-
-      const exportPayload = {
-        exportedAt: new Date().toISOString(),
-        profile: { name: profile?.name, occupation: profile?.occupation },
-        transactions: Array.isArray(txData) ? txData : (txData?.data ?? []),
-        budgets: Array.isArray(budgets) ? budgets : [],
-        goals: Array.isArray(goals) ? goals : [],
-        reminders: Array.isArray(reminders) ? reminders : [],
-        categories: Array.isArray(categories) ? categories : [],
-      };
-
-      const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+      const response = await fetch(`${base}/api/privacy/export`, { credentials: 'include' });
+      if (!response.ok) throw new Error('Your data could not be downloaded. Please sign in again and retry.');
+      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `finance-intelli-export-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `finance-intelli-data-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
 
-      toast({ title: 'Export complete', description: 'Your data has been downloaded as JSON.' });
-    } catch {
-      toast({ title: 'Export failed', description: 'Could not export data. Try again.', variant: 'destructive' });
+      toast({ title: 'Export complete', description: 'Your full financial data archive has been downloaded.' });
+    } catch (error) {
+      toast({ title: 'Export failed', description: error instanceof Error ? error.message : 'Could not export data. Try again.', variant: 'destructive' });
     } finally {
       setIsExporting(false);
     }
@@ -170,6 +160,21 @@ export default function Settings() {
             </div>
           </div>
           <Button variant="outline" onClick={() => setThemeOpen(true)}>Change theme</Button>
+        </div>
+
+        {/* Alerts */}
+        <div className="p-6">
+          <div className="mb-5 flex items-start gap-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10"><BellRing className="h-5 w-5 text-primary" /></div>
+            <div><h3 className="text-lg font-medium">What should need your attention?</h3><p className="text-sm text-muted-foreground">Choose which items appear in your Today action queue.</p></div>
+          </div>
+          <div className="space-y-3 sm:pl-14">
+            <AlertToggle label="Upcoming bills" description="Reminders due within the next 7 days" checked={alerts.data?.preferences?.bills !== false} disabled={saveAlerts.isPending || alerts.isLoading} onChange={value => setAlert('bills', value)} />
+            <AlertToggle label="Budget warnings" description="Categories approaching or past a budget limit" checked={alerts.data?.preferences?.budgets !== false} disabled={saveAlerts.isPending || alerts.isLoading} onChange={value => setAlert('budgets', value)} />
+            <AlertToggle label="Low balances" description="Accounts below your chosen amount" checked={alerts.data?.preferences?.lowBalance !== false} disabled={saveAlerts.isPending || alerts.isLoading} onChange={value => setAlert('lowBalance', value)} />
+            <div className="flex flex-col gap-2 rounded-xl bg-muted/30 p-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-medium">Low balance threshold</p><p className="text-xs text-muted-foreground">The amount is interpreted in each account’s own currency.</p></div><div className="flex items-center gap-2"><Input aria-label="Low balance threshold" type="number" min="0" step="100" className="h-9 w-32" value={threshold} disabled={saveAlerts.isPending || alerts.isLoading} onChange={event => setThreshold(event.target.value)} onBlur={() => { const value = Number(threshold); if (!Number.isFinite(value) || value < 0) { setThreshold('500'); setAlert('lowBalanceThreshold', 500); } else setAlert('lowBalanceThreshold', value); }} /></div></div>
+            <p className="text-xs text-muted-foreground">These are in-app reminders and warnings. Finance Intelli does not send payments or contact your bank.</p>
+          </div>
         </div>
 
         {/* Export */}
@@ -334,4 +339,8 @@ export default function Settings() {
       </Dialog>
     </div>
   );
+}
+
+function AlertToggle({ label, description, checked, disabled, onChange }: { label: string; description: string; checked: boolean; disabled: boolean; onChange: (value: boolean) => void }) {
+  return <div className="flex items-center justify-between gap-4 rounded-xl bg-muted/30 p-3"><div><p className="text-sm font-medium">{label}</p><p className="text-xs text-muted-foreground">{description}</p></div><Switch checked={checked} disabled={disabled} onCheckedChange={onChange} aria-label={label} /></div>;
 }

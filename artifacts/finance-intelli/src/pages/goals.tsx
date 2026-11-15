@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useListGoals, useCreateGoal, useUpdateGoal, useDeleteGoal, useContributeToGoal, Goal } from '@workspace/api-client-react';
 import { DatePicker } from '@/components/ui/date-picker';
 import { Plus, Target, Trophy, TrendingUp, Edit, Trash2 } from 'lucide-react';
@@ -10,6 +11,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Switch } from '@/components/ui/switch';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
+
+type GoalAccount = { id: number; name: string; currency: string };
 
 export default function Goals() {
   const { data: goalsData, isLoading } = useListGoals();
@@ -53,6 +59,9 @@ export default function Goals() {
           {goals.map(goal => {
             const progress = (goal.currentAmount / goal.targetAmount) * 100;
             const isCompleted = progress >= 100;
+            const goalHistory: Array<{ month: string; amount: number }> = (goal as any).progressHistory ?? [];
+            const historyScale = Math.max(Number(goal.targetAmount), ...goalHistory.map(point => point.amount), 1);
+            const recentContributions: Array<{ amount: number; createdAt: string; transferGroupId?: string | null }> = (goal as any).recentContributions ?? [];
             
             return (
               <div key={goal.id} className="glass-card rounded-2xl p-6 relative overflow-hidden group border-t-[4px]" style={{ borderTopColor: goal.color || 'hsl(var(--primary))' }}>
@@ -106,9 +115,11 @@ export default function Goals() {
                 </div>
                 
                 <div className="text-center space-y-1 mb-6">
-                  <div className="text-xl font-mono font-medium">{formatCurrency(goal.currentAmount)}</div>
-                  <div className="text-sm text-muted-foreground">of {formatCurrency(goal.targetAmount)}</div>
+                  <div className="text-xl font-mono font-medium">{formatCurrency(goal.currentAmount, (goal as any).currency || 'INR')}</div>
+                  <div className="text-sm text-muted-foreground">of {formatCurrency(goal.targetAmount, (goal as any).currency || 'INR')}</div>
                 </div>
+
+                {goalHistory.length > 0 && <div className="mb-5 rounded-xl bg-muted/30 p-3"><div className="flex items-center justify-between text-[10px] text-muted-foreground"><span>Progress over 6 months</span><span>{formatCurrency(Math.max(0, goal.currentAmount - Number(goalHistory[goalHistory.length - 1]?.amount ?? 0)), (goal as any).currency || 'INR')} added</span></div><div className="mt-3 flex h-12 items-end gap-1.5">{goalHistory.map(point => <div key={point.month} className="flex h-full flex-1 items-end" title={`${point.month}: ${formatCurrency(point.amount, (goal as any).currency || 'INR')}`}><div className="w-full rounded-t-md bg-primary/70 transition-all" style={{ height: `${Math.max(5, Math.min(100, point.amount / historyScale * 100))}%` }} /></div>)}</div><div className="mt-1 flex justify-between text-[9px] text-muted-foreground">{goalHistory.map(point => <span key={point.month}>{new Date(`${point.month}-01T12:00:00Z`).toLocaleDateString(undefined, { month: 'short' })}</span>)}</div>{recentContributions.length > 0 && <p className="mt-2 truncate text-[10px] text-muted-foreground">Last added {formatCurrency(recentContributions[0].amount, (goal as any).currency || 'INR')} · {formatDate(recentContributions[0].createdAt.slice(0, 10))}{recentContributions[0].transferGroupId ? ' · moved into savings' : ' · progress only'}</p>}</div>}
                 
                 {!isCompleted && (
                   <Button 
@@ -244,13 +255,17 @@ function ContributeForm({ goalId, onClose }: { goalId: number | null, onClose: (
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const contribute = useContributeToGoal();
+  const accounts = useQuery({ queryKey: ['accounts'], queryFn: () => customFetch<GoalAccount[]>('/api/accounts', { responseType: 'json' }) });
   const [amount, setAmount] = useState('');
+  const [moveBetweenAccounts, setMoveBetweenAccounts] = useState(false);
+  const [sourceAccountId, setSourceAccountId] = useState('');
+  const [destinationAccountId, setDestinationAccountId] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!goalId || !amount) return;
 
-    contribute.mutate({ id: goalId, data: { amount: parseFloat(amount) } }, {
+    contribute.mutate({ id: goalId, data: { amount: parseFloat(amount), ...(moveBetweenAccounts ? { accountId: Number(sourceAccountId), destinationAccountId: Number(destinationAccountId) } : {}) } as any }, {
       onSuccess: (res: any) => {
         toast({ title: 'Contribution added successfully' });
         if (res.isCompleted) {
@@ -272,10 +287,12 @@ function ContributeForm({ goalId, onClose }: { goalId: number | null, onClose: (
           <Label>Amount to add</Label>
           <Input type="number" step="0.01" required value={amount} onChange={e => setAmount(e.target.value)} autoFocus placeholder="0.00" className="text-2xl h-14 font-mono" />
         </div>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 p-3"><div><p className="text-sm font-medium">Move between my accounts</p><p className="text-xs text-muted-foreground">Record a real internal transfer into savings.</p></div><Switch checked={moveBetweenAccounts} onCheckedChange={setMoveBetweenAccounts} aria-label="Move contribution between accounts" /></div>
+        {moveBetweenAccounts ? <div className="space-y-3 rounded-xl bg-muted/30 p-3"><div><Label>Move from</Label><Select value={sourceAccountId} onValueChange={value => { setSourceAccountId(value); if (value === destinationAccountId) setDestinationAccountId(''); }}><SelectTrigger className="mt-1"><SelectValue placeholder="Choose source account" /></SelectTrigger><SelectContent>{(accounts.data ?? []).map(account => <SelectItem key={account.id} value={String(account.id)}>{account.name} · {account.currency}</SelectItem>)}</SelectContent></Select></div><div><Label>Move into savings</Label><Select value={destinationAccountId} onValueChange={setDestinationAccountId}><SelectTrigger className="mt-1"><SelectValue placeholder="Choose savings account" /></SelectTrigger><SelectContent>{(accounts.data ?? []).filter(account => account.id !== Number(sourceAccountId) && (!sourceAccountId || account.currency === accounts.data?.find(item => item.id === Number(sourceAccountId))?.currency)).map(account => <SelectItem key={account.id} value={String(account.id)}>{account.name} · {account.currency}</SelectItem>)}</SelectContent></Select></div><p className="text-xs text-muted-foreground">Both accounts must use the same currency. Account balances move, while your total net worth stays unchanged.</p></div> : <p className="rounded-xl bg-muted/30 p-3 text-xs text-muted-foreground">This records progress toward your goal only. Account balances will not change.</p>}
       </div>
       <div className="mt-8 flex justify-end gap-3">
         <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-        <Button type="submit" disabled={contribute.isPending}>Add Contribution</Button>
+        <Button type="submit" disabled={contribute.isPending || !amount || (moveBetweenAccounts && (!sourceAccountId || !destinationAccountId))}>{contribute.isPending ? 'Saving…' : moveBetweenAccounts ? 'Transfer and add' : 'Record progress'}</Button>
       </div>
     </form>
   );

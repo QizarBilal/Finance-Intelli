@@ -35,6 +35,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { PaytmStatementImport } from '@/components/PaytmStatementImport';
 
 export default function Transactions() {
   const [location] = useLocation();
@@ -45,11 +46,17 @@ export default function Transactions() {
 
   const [searchTerm, setSearchParams] = useState('');
   const [filterType, setFilterType] = useState<string>('all');
+  const [displayLimit, setDisplayLimit] = useState(50);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [bulkType, setBulkType] = useState('__keep__');
+  const [bulkCategory, setBulkCategory] = useState('__keep__');
+  const [bulkSaving, setBulkSaving] = useState(false);
+  const { data: categories = [] } = useListCategories();
   
   const { data: transactions, isLoading } = useListTransactions({ 
     search: searchTerm || undefined,
     type: filterType !== 'all' ? filterType as any : undefined,
-    limit: 50
+    limit: displayLimit
   });
 
   const deleteTx = useDeleteTransaction();
@@ -77,6 +84,22 @@ export default function Transactions() {
     setEditingTx(null);
   };
 
+  const visibleIds = transactions?.data?.filter(tx => tx.type !== 'transfer').map(tx => tx.id) ?? [];
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds.includes(id));
+  const applyBulkEdit = async () => {
+    setBulkSaving(true);
+    try {
+      const body: { ids: number[]; type?: string; category?: string | null } = { ids: selectedIds };
+      if (bulkType !== '__keep__') body.type = bulkType;
+      if (bulkCategory !== '__keep__') body.category = bulkCategory === '__uncategorized__' ? null : bulkCategory;
+      const result = await customFetch<{ updated: number }>('/api/transactions/bulk', { method: 'PATCH', responseType: 'json', body: JSON.stringify(body) });
+      toast({ title: `${result.updated} transactions updated`, description: 'Your selected transactions now share the chosen type and category.' });
+      setSelectedIds([]); setBulkCategory('__keep__'); setBulkType('__keep__'); queryClient.invalidateQueries();
+    } catch (error) {
+      toast({ title: 'Bulk update failed', description: error instanceof Error ? error.message : 'Refresh and try again.', variant: 'destructive' });
+    } finally { setBulkSaving(false); }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -84,9 +107,12 @@ export default function Transactions() {
           <h1 className="text-3xl font-display font-bold tracking-tight">Transactions</h1>
           <p className="text-muted-foreground mt-1">Manage your income, expenses, and transfers.</p>
         </div>
-        <Button onClick={() => setIsFormOpen(true)}>
-          <Plus className="w-4 h-4 mr-2" /> Add Transaction
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <PaytmStatementImport />
+          <Button onClick={() => setIsFormOpen(true)}>
+            <Plus className="w-4 h-4 mr-2" /> Add Transaction
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4 mb-6">
@@ -96,11 +122,11 @@ export default function Transactions() {
             placeholder="Search descriptions, categories..." 
             className="pl-9 glass-card border-none bg-card/40"
             value={searchTerm}
-            onChange={(e) => setSearchParams(e.target.value)}
+            onChange={(e) => { setSearchParams(e.target.value); setDisplayLimit(50); setSelectedIds([]); }}
           />
         </div>
         <div className="flex gap-2">
-          <Select value={filterType} onValueChange={setFilterType}>
+          <Select value={filterType} onValueChange={value => { setFilterType(value); setDisplayLimit(50); setSelectedIds([]); }}>
             <SelectTrigger className="w-[140px] glass-card border-none bg-card/40">
               <Filter className="w-4 h-4 mr-2 text-muted-foreground" />
               <SelectValue placeholder="Filter type" />
@@ -115,16 +141,27 @@ export default function Transactions() {
         </div>
       </div>
 
+      {transactions?.data && transactions.data.length > 0 && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-card/50 p-3">
+        <div className="flex items-center gap-2"><Button variant="ghost" size="sm" onClick={() => setSelectedIds(allVisibleSelected ? selectedIds.filter(id => !visibleIds.includes(id)) : [...new Set([...selectedIds, ...visibleIds])].slice(0, 100))}>{allVisibleSelected ? 'Deselect visible' : 'Select visible'}</Button><span className="text-xs text-muted-foreground">{selectedIds.length ? `${selectedIds.length} selected · 100 max` : 'Select entries to categorize together · 100 max'}</span></div>
+        {selectedIds.length > 0 && <div className="flex flex-wrap items-center gap-2">
+          <Select value={bulkType} onValueChange={setBulkType}><SelectTrigger className="h-9 w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="__keep__">Keep type</SelectItem><SelectItem value="expense">Expense</SelectItem><SelectItem value="income">Income</SelectItem></SelectContent></Select>
+          <Select value={bulkCategory} onValueChange={setBulkCategory}><SelectTrigger className="h-9 w-44"><SelectValue placeholder="Category" /></SelectTrigger><SelectContent><SelectItem value="__keep__">Keep category</SelectItem><SelectItem value="__uncategorized__">Uncategorized</SelectItem>{categories.filter(category => bulkType === '__keep__' || category.type === bulkType || category.type === 'both').map(category => <SelectItem key={category.id} value={category.name}>{category.name}</SelectItem>)}</SelectContent></Select>
+          <Button size="sm" onClick={() => void applyBulkEdit()} disabled={bulkSaving || (bulkCategory === '__keep__' && bulkType === '__keep__')}>{bulkSaving ? 'Saving…' : 'Apply changes'}</Button>
+        </div>}
+      </div>}
+
       <div className="glass-card rounded-2xl overflow-hidden">
         {isLoading ? (
           <div className="p-12 flex justify-center text-muted-foreground">
             <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
           </div>
         ) : transactions?.data && transactions.data.length > 0 ? (
+          <>
           <div className="divide-y divide-border/50">
             {transactions.data.map((tx) => (
               <div key={tx.id} className="p-4 flex items-center justify-between hover:bg-white/5 transition-colors group">
-                <div className="flex items-center gap-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <Checkbox aria-label={`Select transaction ${tx.description || tx.category || tx.id}`} disabled={tx.type === 'transfer' || (!selectedIds.includes(tx.id) && selectedIds.length >= 100)} checked={selectedIds.includes(tx.id)} onCheckedChange={checked => setSelectedIds(current => checked ? [...new Set([...current, tx.id])].slice(0, 100) : current.filter(id => id !== tx.id))} />
                   <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
                     tx.type === 'income' ? 'bg-emerald-500/10 text-emerald-500' : 
                     tx.type === 'expense' ? 'bg-rose-500/10 text-rose-500' : 'bg-blue-500/10 text-blue-500'
@@ -167,6 +204,8 @@ export default function Transactions() {
               </div>
             ))}
           </div>
+          {transactions.total > transactions.data.length && <div className="border-t p-4 text-center"><p className="mb-2 text-xs text-muted-foreground">Showing {transactions.data.length} of {transactions.total} transactions</p><Button variant="outline" onClick={() => setDisplayLimit(value => Math.min(value + 50, transactions.total))}>Load more</Button></div>}
+          </>
         ) : (
           <div className="p-16 text-center flex flex-col items-center">
             <div className="w-16 h-16 rounded-full bg-muted/50 flex items-center justify-center mb-4">

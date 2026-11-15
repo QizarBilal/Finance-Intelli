@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useListBudgets, useCreateBudget, useUpdateBudget, useDeleteBudget, Budget } from '@workspace/api-client-react';
 import { Plus, Target, PieChart, AlertCircle, Edit, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -10,6 +11,9 @@ import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { customFetch } from '@workspace/api-client-react/custom-fetch';
+
+type BudgetAccount = { id: number; name: string; currency: string };
 
 export default function Budgets() {
   const { data: budgetsData, isLoading } = useListBudgets();
@@ -31,9 +35,6 @@ export default function Budgets() {
     });
   };
 
-  const totalBudget = budgets.reduce((acc, b) => acc + b.amount, 0);
-  const totalSpent = budgets.reduce((acc, b) => acc + b.spent, 0);
-  const overallUsage = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : 0;
 
   return (
     <div className="space-y-8">
@@ -48,22 +49,7 @@ export default function Budgets() {
       </div>
 
       {budgets.length > 0 && (
-        <div className="glass-card rounded-2xl p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <PieChart className="w-5 h-5 text-primary" />
-            <h2 className="text-lg font-medium">Overall Budget Usage</h2>
-          </div>
-          <div className="flex justify-between items-end mb-2">
-            <div className="text-3xl font-display font-bold">{formatCurrency(totalSpent)}</div>
-            <div className="text-muted-foreground text-sm">of {formatCurrency(totalBudget)}</div>
-          </div>
-          <div className="h-3 w-full bg-muted rounded-full overflow-hidden">
-            <div 
-              className={`h-full transition-all ${overallUsage > 90 ? 'bg-destructive' : overallUsage > 75 ? 'bg-amber-400' : 'bg-emerald-500'}`}
-              style={{ width: `${Math.min(overallUsage, 100)}%` }}
-            />
-          </div>
-        </div>
+        <div className="flex gap-3 rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm"><PieChart className="mt-0.5 h-4 w-4 shrink-0 text-primary"/><p className="text-muted-foreground">Each limit is tracked within its own period and category. A purchase can count toward more than one relevant limit, so the cards below show each budget separately.</p></div>
       )}
 
       {isLoading ? (
@@ -71,8 +57,10 @@ export default function Budgets() {
       ) : budgets.length > 0 ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {budgets.map(budget => {
-            const usagePercent = (budget.spent / budget.amount) * 100;
-            const isWarning = usagePercent > (budget.alertThreshold || 80);
+            const unresolvedCurrency = !(budget as any).currency && budget.spent == null;
+            const spent = Number(budget.spent ?? 0);
+            const usagePercent = (spent / budget.amount) * 100;
+            const isWarning = usagePercent >= (budget.alertThreshold || 80);
             const isOver = usagePercent > 100;
             
             return (
@@ -84,7 +72,7 @@ export default function Budgets() {
                     </div>
                     <div>
                       <h3 className="font-semibold text-lg">{budget.name}</h3>
-                      <div className="text-xs text-muted-foreground">{budget.period} • {budget.category || 'All Categories'}</div>
+                      <div className="text-xs text-muted-foreground">{budget.period} • {budget.category || 'All Categories'}{(budget as any).currency ? ` · ${(budget as any).currency}` : ''}</div>
                     </div>
                   </div>
                   <DropdownMenu>
@@ -105,9 +93,11 @@ export default function Budgets() {
                 </div>
                 
                 <div className="flex justify-between items-end mb-2 mt-6">
-                  <div className="text-2xl font-mono font-medium">{formatCurrency(budget.spent)}</div>
-                  <div className="text-sm text-muted-foreground">Limit: {formatCurrency(budget.amount)}</div>
+                  <div className="text-2xl font-mono font-medium">{unresolvedCurrency ? 'Choose a currency' : formatCurrency(spent, (budget as any).currency || 'INR')}</div>
+                  <div className="text-sm text-muted-foreground">Limit: {formatCurrency(budget.amount, (budget as any).currency || 'INR')}</div>
                 </div>
+
+                {unresolvedCurrency ? <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-3"><p className="text-xs text-amber-400">This budget had no currency selected. Activity spans multiple currencies, so totals and warnings are paused until you choose one.</p><div className="mt-2 flex flex-wrap gap-2">{((budget as any).spentByCurrency ?? []).map((item: { currency: string; amount: number }) => <span key={item.currency} className="rounded-full bg-muted px-2 py-1 text-[10px]">{formatCurrency(item.amount, item.currency)}</span>)}</div><Button size="sm" variant="outline" className="mt-3" onClick={() => { setEditingBudget(budget); setIsFormOpen(true); }}>Choose currency</Button></div> : <>
                 
                 <div className="h-2 w-full bg-muted rounded-full overflow-hidden mb-2">
                   <div 
@@ -121,9 +111,12 @@ export default function Budgets() {
                     {usagePercent.toFixed(1)}% used
                   </span>
                   <span className="text-muted-foreground">
-                    {budget.amount - budget.spent > 0 ? `${formatCurrency(budget.amount - budget.spent)} left` : 'Over budget'}
+                    {budget.amount - spent > 0 ? `${formatCurrency(budget.amount - spent, (budget as any).currency || 'INR')} left` : 'Over budget'}
                   </span>
                 </div>
+                {isOver && <p role="status" className="mt-3 flex items-center gap-2 text-xs font-medium text-destructive"><AlertCircle className="h-3.5 w-3.5" />Limit exceeded by {formatCurrency(spent - budget.amount, (budget as any).currency || 'INR')}</p>}
+                {isWarning && !isOver && <p role="status" className="mt-3 flex items-center gap-2 text-xs font-medium text-amber-400"><AlertCircle className="h-3.5 w-3.5" />You're approaching this spending limit.</p>}
+                </>}
               </div>
             );
           })}
@@ -158,18 +151,22 @@ function BudgetForm({ budget, onClose }: { budget: Budget | null, onClose: () =>
   const { toast } = useToast();
   const createBudget = useCreateBudget();
   const updateBudget = useUpdateBudget();
+  const accounts = useQuery({ queryKey: ['accounts'], queryFn: () => customFetch<BudgetAccount[]>('/api/accounts', { responseType: 'json' }) });
 
   const [formData, setFormData] = useState({
     name: budget?.name || '',
     amount: budget?.amount?.toString() || '',
     period: budget?.period || 'monthly',
     category: budget?.category || '',
+    currency: (budget as any)?.currency || '',
     alertThreshold: budget?.alertThreshold?.toString() || '80'
   });
+  const currencyOptions = [...new Set([...(accounts.data ?? []).map(account => account.currency), formData.currency, 'INR'].filter(Boolean))];
+  useEffect(() => { if (!formData.currency && accounts.data?.length) setFormData(current => ({ ...current, currency: accounts.data?.[0]?.currency ?? 'INR' })); }, [accounts.data, formData.currency]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name || !formData.amount) return;
+    if (!formData.name || !formData.amount || !formData.currency) return;
 
     const payload = {
       ...formData,
@@ -212,6 +209,8 @@ function BudgetForm({ budget, onClose }: { budget: Budget | null, onClose: () =>
           <Label>Amount Limit</Label>
           <Input type="number" required min="1" value={formData.amount} onChange={e => setFormData(p => ({...p, amount: e.target.value}))} />
         </div>
+
+        <div className="space-y-2"><Label>Currency</Label><Select value={formData.currency} onValueChange={currency => setFormData(p => ({ ...p, currency }))}><SelectTrigger><SelectValue placeholder="Choose currency" /></SelectTrigger><SelectContent>{currencyOptions.map(currency => <SelectItem key={currency} value={currency}>{currency}</SelectItem>)}</SelectContent></Select><p className="text-xs text-muted-foreground">Only transactions in this currency count toward this limit.</p></div>
         
         <div className="space-y-2">
           <Label>Period</Label>

@@ -129,7 +129,7 @@ export default function Reports() {
       </div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {report?.hasMixedCurrencies ? <div className="grid gap-4 sm:grid-cols-2">{report.currencyBreakdown.map((group: any) => <div key={group.currency} className="glass-card rounded-2xl p-5"><p className="text-sm font-semibold">{group.currency} activity</p><div className="mt-3 grid grid-cols-3 gap-2"><Small label="Income" value={formatCurrency(group.income, group.currency)}/><Small label="Expenses" value={formatCurrency(group.expense, group.currency)}/><Small label="Saved" value={formatCurrency(group.savings, group.currency)}/></div></div>)}</div> : <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: 'Income', value: income, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
           { label: 'Expense', value: expense, color: 'text-rose-400', bg: 'bg-rose-500/10' },
@@ -141,10 +141,10 @@ export default function Reports() {
             <div className={`text-xl font-mono font-bold ${card.color}`}>{formatCurrency(card.value)}</div>
           </div>
         ))}
-      </div>
+      </div>}
 
       {/* Top spending categories */}
-      {topCategories.length > 0 && (
+      {!report?.hasMixedCurrencies && topCategories.length > 0 && (
         <div className="glass-card rounded-2xl p-6">
           <h3 className="font-semibold mb-4 flex items-center gap-2">
             <TrendingUp className="w-5 h-5 text-primary" /> Top Spending Categories
@@ -241,4 +241,8 @@ export default function Reports() {
       )}
     </div>
   );
+}
+
+function Small({ label, value }: { label: string; value: string }) {
+  return <div className="rounded-lg bg-muted/40 p-2"><p className="text-[10px] text-muted-foreground">{label}</p><p className="mt-1 truncate font-mono text-xs font-semibold">{value}</p></div>;
 }

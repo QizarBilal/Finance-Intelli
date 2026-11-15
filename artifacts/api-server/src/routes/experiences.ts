@@ -10,6 +10,7 @@ import {
 import { requireAuth } from "../middlewares/auth";
 import { getAccountBalance } from "../lib/accounts";
 import { writeAudit } from "../lib/audit";
+import { periodRange } from "../lib/dates";
 const router = Router(),
   clean = (v: unknown) => (typeof v === "string" ? v.trim() : ""),
   money = (v: unknown) =>
@@ -39,6 +40,7 @@ async function create(name: CollectionName, profileId: number, value: any) {
 }
 router.get("/command-center", requireAuth, async (req, res) => {
   const id = req.user!.userId,
+    alertPrefs: any = await (await getCollection(collections.notificationPreferences)).findOne({ profileId: id }),
     accounts: any[] = await (
       await getCollection(collections.accounts)
     )
@@ -83,15 +85,16 @@ router.get("/command-center", requireAuth, async (req, res) => {
         deletedAt: null,
       })
       .toArray(),
-    spend = new Map<string, number>();
+    spend = new Map<string, number>(),
+    currencyByAccount = new Map(accounts.map(account => [account.id, account.currency ?? "INR"])),
+    accountCurrencies = new Set(accounts.map(account => account.currency ?? "INR"));
   for (const t of txs)
-    spend.set(
-      String(t.category || "").toLowerCase(),
-      (spend.get(String(t.category || "").toLowerCase()) || 0) +
-        Number(t.amount),
-    );
+    {
+      const key = `${currencyByAccount.get(t.accountId) ?? "INR"}:${String(t.category || "").toLowerCase()}`;
+      spend.set(key, (spend.get(key) || 0) + Number(t.amount));
+    }
   const tasks = [
-    ...due.map((r) => ({
+    ...(alertPrefs?.bills === false ? [] : due.map((r) => ({
       id: `reminder-${r.id}`,
       priority: r.dueDate <= today() ? "urgent" : "soon",
       title: `${r.title} is due`,
@@ -99,25 +102,37 @@ router.get("/command-center", requireAuth, async (req, res) => {
         ? `Prepare ${Number(r.amount).toFixed(2)}`
         : "Review and complete",
       href: "/reminders",
-    })),
+    }))),
     ...budgets
       .filter(
-        (b) =>
+        (b) => {
+          const currency = b.currency ?? (accountCurrencies.size === 1 ? [...accountCurrencies][0] : null);
+          return Boolean(currency) &&
+          alertPrefs?.budgets !== false &&
           b.category &&
           Number(b.limitAmount ?? b.amount) > 0 &&
-          (spend.get(b.category.toLowerCase()) || 0) /
+          (spend.get(`${currency}:${b.category.toLowerCase()}`) || 0) /
             Number(b.limitAmount ?? b.amount) >=
-            0.8,
+            0.8;
+        },
       )
-      .map((b) => ({
+      .map((b) => {
+        const currency = b.currency ?? [...accountCurrencies][0];
+        const used = spend.get(`${currency}:${b.category.toLowerCase()}`) || 0;
+        return {
         id: `budget-${b.id}`,
         priority: "warning",
         title: `${b.category} budget needs attention`,
-        detail: `${Math.round(((spend.get(b.category.toLowerCase()) || 0) / Number(b.limitAmount ?? b.amount)) * 100)}% used`,
+        detail: `${Math.round((used / Number(b.limitAmount ?? b.amount)) * 100)}% used · ${currency}`,
         href: "/budgets",
-      })),
+        };
+      }),
+    ...(accountCurrencies.size > 1 && alertPrefs?.budgets !== false && budgets.some(budget => !budget.currency && budget.category) ? [{
+      id: "budget-currency-review", priority: "warning", title: "Choose currencies for older budgets",
+      detail: "Budget alerts are paused where account currencies could be mixed.", href: "/budgets",
+    }] : []),
     ...balances
-      .filter((a) => a.balance < 0)
+      .filter((a) => alertPrefs?.lowBalance !== false && a.balance < Number(alertPrefs?.lowBalanceThreshold ?? 500))
       .map((a) => ({
         id: `account-${a.id}`,
         priority: "urgent",
@@ -129,12 +144,123 @@ router.get("/command-center", requireAuth, async (req, res) => {
   res.json({
     tasks,
     balances,
+    setup: {
+      hasAccounts: accounts.length > 0,
+      hasTransactions: await (await getCollection(collections.transactions)).countDocuments({ profileId: id, deletedAt: { $in: [null, undefined] }, status: { $ne: "void" } }) > 0,
+      hasBudget: budgets.some(budget => !budget.archivedAt),
+      hasGoal: await (await getCollection(collections.goals)).countDocuments({ profileId: id }) > 0,
+    },
     upcomingBills: withoutMongoIds(due),
     activeSubscriptions: subs,
     unreadNotifications: unread,
     allClear: !tasks.length,
   });
 });
+router.get("/giving", requireAuth, async (req, res) => {
+  const profileId = req.user!.userId;
+  const profile: any = await (await getCollection(collections.profiles)).findOne({ id: profileId });
+  const ranges = {
+    today: periodRange("today", profile?.timezone ?? "UTC", profile?.weekStarts ?? "monday"),
+    month: periodRange("monthly", profile?.timezone ?? "UTC", profile?.weekStarts ?? "monday"),
+    year: periodRange("yearly", profile?.timezone ?? "UTC", profile?.weekStarts ?? "monday"),
+  };
+  const accounts: any[] = await (await getCollection(collections.accounts)).find({ profileId }).toArray();
+  const currencies = new Map(accounts.map(account => [account.id, account.currency ?? "INR"]));
+  const rows: any[] = await (await getCollection(collections.transactions)).find({
+    profileId,
+    type: "expense",
+    category: { $regex: "^(giving|donation|donations|charity|charitable contributions)$", $options: "i" },
+    status: { $in: ["cleared", "reconciled"] },
+    deletedAt: { $in: [null, undefined] },
+  }).sort({ date: -1, createdAt: -1 }).limit(5000).toArray();
+  const totals = (from: string, to: string) => {
+    const grouped = new Map<string, number>();
+    for (const row of rows) {
+      if (row.date < from || row.date > to) continue;
+      const currency = currencies.get(row.accountId) ?? "INR";
+      grouped.set(currency, (grouped.get(currency) ?? 0) + Number(row.amount));
+    }
+    return [...grouped].map(([currency, amount]) => ({ currency, amount }));
+  };
+  const reminders: any[] = await (await getCollection(collections.reminders)).find({
+    profileId, type: "personal", title: { $regex: "^Giving ·", $options: "i" }, isCompleted: false,
+  }).sort({ dueDate: 1 }).limit(10).toArray();
+  res.json({
+    today: totals(ranges.today.from, ranges.today.to),
+    month: totals(ranges.month.from, ranges.month.to),
+    year: totals(ranges.year.from, ranges.year.to),
+    totalCount: rows.length,
+    recent: rows.slice(0, 30).map(row => ({ ...withoutMongoId(row), currency: currencies.get(row.accountId) ?? "INR" })),
+    reminders: withoutMongoIds(reminders),
+  });
+});
+
+router.get("/monthly-brief", requireAuth, async (req, res) => {
+  const profileId = req.user!.userId;
+  const profile: any = await (await getCollection(collections.profiles)).findOne({ id: profileId });
+  const timezone = profile?.timezone ?? "UTC";
+  const current = periodRange("monthly", timezone, profile?.weekStarts ?? "monday");
+  const today = periodRange("today", timezone).from;
+  const [year, month] = current.from.split("-").map(Number);
+  const previousDate = new Date(Date.UTC(year, month - 2, 1, 12));
+  const previousFrom = `${previousDate.getUTCFullYear()}-${String(previousDate.getUTCMonth() + 1).padStart(2, "0")}-01`;
+  const previousMonthEnd = new Date(Date.UTC(year, month - 1, 0, 12));
+  const comparableDay = Math.min(Number(today.slice(-2)), previousMonthEnd.getUTCDate());
+  const previousTo = `${previousMonthEnd.getUTCFullYear()}-${String(previousMonthEnd.getUTCMonth() + 1).padStart(2, "0")}-${String(comparableDay).padStart(2, "0")}`;
+  const accounts: any[] = await (await getCollection(collections.accounts)).find({ profileId }).toArray();
+  const currencies = new Map(accounts.map(account => [account.id, account.currency ?? "INR"]));
+  const transactions: any[] = await (await getCollection(collections.transactions)).find({
+    profileId, date: { $gte: previousFrom, $lte: today }, deletedAt: { $in: [null, undefined] }, status: { $ne: "void" },
+  }).toArray();
+  const summaries = new Map<string, any>();
+  const categories = new Map<string, Map<string, number>>();
+  for (const currency of new Set(accounts.map(account => account.currency ?? "INR"))) {
+    summaries.set(`current:${currency}`, { currency, income: 0, expenses: 0, savings: 0 });
+    summaries.set(`previous:${currency}`, { currency, income: 0, expenses: 0, savings: 0 });
+  }
+  for (const tx of transactions) {
+    const currency = currencies.get(tx.accountId) ?? "INR";
+    const previous = tx.date < current.from;
+    const key = `${previous ? "previous" : "current"}:${currency}`;
+    const value = summaries.get(key) ?? { currency, income: 0, expenses: 0, savings: 0 };
+    if (tx.type === "income") value.income += Number(tx.amount);
+    if (tx.type === "expense") {
+      value.expenses += Number(tx.amount);
+      if (!previous) {
+        const category = String(tx.category || "Uncategorized");
+        const groups = categories.get(currency) ?? new Map<string, number>();
+        groups.set(category, (groups.get(category) ?? 0) + Number(tx.amount));
+        categories.set(currency, groups);
+      }
+    }
+    value.savings = value.income - value.expenses;
+    summaries.set(key, value);
+  }
+  const currenciesSeen = new Set(accounts.map(account => account.currency ?? "INR"));
+  const currentSummaries = [...summaries].filter(([key]) => key.startsWith("current:")).map(([, value]) => value);
+  const brief = currentSummaries.map(now => {
+    const before = summaries.get(`previous:${now.currency}`) ?? { income: 0, expenses: 0, savings: 0 };
+    const daysElapsed = Math.max(1, Number(today.slice(-2)));
+    const daysInMonth = Number(current.to.slice(-2));
+    const projectedExpenses = now.expenses / daysElapsed * daysInMonth;
+    const savingsRate = now.income > 0 ? Math.round((now.savings / now.income) * 100) : null;
+    const topCategory = [...(categories.get(now.currency) ?? new Map())].sort((a, b) => b[1] - a[1])[0];
+    const highlights: Array<{ title: string; detail: string; tone: "positive" | "caution" | "neutral" }> = [];
+    if (before.expenses > 0 && now.expenses > before.expenses * 1.15) {
+      const change = Math.round((now.expenses - before.expenses) / before.expenses * 100);
+      highlights.push({ title: "Spending is higher", detail: `${change}% more than last month in ${now.currency}. Review recent activity for changes you want to address.`, tone: "caution" });
+    } else if (before.expenses > 0 && now.expenses < before.expenses * 0.85) {
+      const change = Math.round((before.expenses - now.expenses) / before.expenses * 100);
+      highlights.push({ title: "Spending is lower", detail: `${change}% less than last month in ${now.currency}.`, tone: "positive" });
+    }
+    if (savingsRate !== null && savingsRate < 10) highlights.push({ title: "Savings are under 10%", detail: "Look at recurring costs and set a small automatic savings goal if it fits your plan.", tone: "caution" });
+    if (topCategory && now.expenses > 0) highlights.push({ title: `Top category: ${topCategory[0]}`, detail: `${Math.round(topCategory[1] / now.expenses * 100)}% of this month's spending in ${now.currency}.`, tone: "neutral" });
+    if (!highlights.length) highlights.push({ title: "Your month is taking shape", detail: "Keep recording or importing transactions to get a more useful month-end picture.", tone: "neutral" });
+    return { currency: now.currency, income: now.income, expenses: now.expenses, net: now.savings, previousIncome: before.income, previousExpenses: before.expenses, previousNet: before.savings, savingsRate, projectedExpenses, topCategory: topCategory ? { name: topCategory[0], amount: topCategory[1] } : null, highlights };
+  });
+  res.json({ month: current.from.slice(0, 7), through: today, comparisonThrough: previousTo, isPartialMonth: today < current.to, hasMixedCurrencies: currenciesSeen.size > 1, summaries: brief });
+});
+
 router.get("/subscriptions", requireAuth, async (req, res) => {
   const id = req.user!.userId,
     explicit: any[] = await (
@@ -227,6 +353,7 @@ router.get("/net-worth", requireAuth, async (req, res) => {
         id: a.id,
         name: a.name,
         type: a.type,
+        currency: a.currency ?? "INR",
         balance: await getAccountBalance(id, a.id),
       })),
     ),
@@ -242,27 +369,34 @@ router.get("/net-worth", requireAuth, async (req, res) => {
       s.asOfDate,
       (timeline.get(s.asOfDate) || 0) + Number(s.balance),
     );
-  const netWorth = current.reduce((s, a) => s + a.balance, 0),
-    assets = current
+  const currencyBalances = Object.entries(current.reduce<Record<string, number>>((totals, account) => {
+    totals[account.currency] = (totals[account.currency] ?? 0) + account.balance;
+    return totals;
+  }, {})).map(([currency, balance]) => ({ currency, balance }));
+  const hasMixedCurrencies = currencyBalances.length > 1;
+  const netWorth = hasMixedCurrencies ? null : current.reduce((s, a) => s + a.balance, 0),
+    assets = hasMixedCurrencies ? null : current
       .filter((a) => !["credit_card", "loan"].includes(a.type))
       .reduce((s, a) => s + Math.max(0, a.balance), 0),
-    liabilities = current
+    liabilities = hasMixedCurrencies ? null : current
       .filter((a) => ["credit_card", "loan"].includes(a.type))
       .reduce((s, a) => s + Math.abs(Math.min(0, a.balance)), 0),
     marks = [0, 10000, 25000, 50000, 100000, 250000, 500000, 1000000],
     next =
-      marks.find((v) => v > netWorth) ?? Math.ceil(netWorth / 1e6 + 1) * 1e6;
+      marks.find((v) => v > Number(netWorth)) ?? Math.ceil(Number(netWorth) / 1e6 + 1) * 1e6;
   res.json({
     netWorth,
     assets,
     liabilities,
+    currencyBalances,
+    hasMixedCurrencies,
     accounts: current,
-    timeline: [...timeline].map(([date, value]) => ({ date, value })),
-    milestone: {
+    timeline: hasMixedCurrencies ? [] : [...timeline].map(([date, value]) => ({ date, value })),
+    milestone: hasMixedCurrencies ? null : {
       next,
-      remaining: Math.max(0, next - netWorth),
+      remaining: Math.max(0, next - Number(netWorth)),
       progress: next
-        ? Math.max(0, Math.min(100, (netWorth / next) * 100))
+        ? Math.max(0, Math.min(100, (Number(netWorth) / next) * 100))
         : 100,
     },
   });
@@ -276,12 +410,19 @@ router.get("/emergency-fund", requireAuth, async (req, res) => {
       .find({
         profileId: id,
         archivedAt: null,
-        type: { $in: ["checking", "savings", "cash"] },
+        type: { $in: ["bank", "wallet", "cash"] },
       })
       .toArray(),
-    liquid = (
-      await Promise.all(accounts.map((a) => getAccountBalance(id, a.id)))
-    ).reduce((s, n) => s + Math.max(0, n), 0),
+    accountBalances = await Promise.all(accounts.map(async (account) => ({
+      currency: account.currency ?? "INR",
+      amount: Math.max(0, await getAccountBalance(id, account.id)),
+    }))),
+    currencyTotals = Object.entries(accountBalances.reduce<Record<string, number>>((totals, row) => {
+      totals[row.currency] = (totals[row.currency] ?? 0) + row.amount;
+      return totals;
+    }, {})).map(([currency, amount]) => ({ currency, amount })),
+    hasMixedCurrencies = currencyTotals.length > 1,
+    liquid = hasMixedCurrencies ? null : currencyTotals[0]?.amount ?? 0,
     since = new Date();
   since.setUTCMonth(since.getUTCMonth() - 3);
   const txs: any[] = await (
@@ -294,16 +435,18 @@ router.get("/emergency-fund", requireAuth, async (req, res) => {
         deletedAt: null,
       })
       .toArray(),
-    monthly = txs.reduce((s, t) => s + Number(t.amount), 0) / 3,
-    target = monthly * months;
+    monthly = hasMixedCurrencies ? null : txs.reduce((s, t) => s + Number(t.amount), 0) / 3,
+    target = hasMixedCurrencies ? null : (monthly ?? 0) * months;
   res.json({
     liquid,
+    currencyTotals,
+    hasMixedCurrencies,
     monthlyEssentials: monthly,
     targetMonths: months,
     target,
-    gap: Math.max(0, target - liquid),
-    monthsCovered: monthly ? liquid / monthly : 0,
-    ready: liquid >= target,
+    gap: target == null || liquid == null ? null : Math.max(0, target - liquid),
+    monthsCovered: monthly && liquid != null ? liquid / monthly : null,
+    ready: target != null && liquid != null ? liquid >= target : null,
     explanation:
       "Liquid balances compared with the trailing three-month average expense level.",
   });
@@ -411,9 +554,19 @@ router.get("/cash-flow", requireAuth, async (req, res) => {
     )
       .find({ profileId: id, archivedAt: null })
       .toArray();
-  let balance = (
-    await Promise.all(accounts.map((a) => getAccountBalance(id, a.id)))
-  ).reduce((s, n) => s + n, 0);
+  const accountBalances = await Promise.all(accounts.map(async (account) => ({
+      currency: account.currency ?? "INR",
+      balance: await getAccountBalance(id, account.id),
+    }))),
+    currencyBalances = Object.entries(accountBalances.reduce<Record<string, number>>((totals, row) => {
+      totals[row.currency] = (totals[row.currency] ?? 0) + row.balance;
+      return totals;
+    }, {})).map(([currency, balance]) => ({ currency, balance }));
+  if (currencyBalances.length > 1) {
+    res.json({ openingBalance: null, events: [], lowestBalance: null, hasShortfall: false, hasMixedCurrencies: true, currencyBalances });
+    return;
+  }
+  let balance = accountBalances.reduce((sum, account) => sum + account.balance, 0);
   const opening = balance,
     rem: any[] = await (
       await getCollection(collections.reminders)
@@ -440,6 +593,8 @@ router.get("/cash-flow", requireAuth, async (req, res) => {
     });
   res.json({
     openingBalance: opening,
+    hasMixedCurrencies: false,
+    currencyBalances,
     events,
     lowestBalance: events.reduce(
       (m, e) => Math.min(m, e.projectedBalance),

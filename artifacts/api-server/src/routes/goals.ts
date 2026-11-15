@@ -16,11 +16,13 @@ import {
   ContributeToGoalBody,
 } from "@workspace/api-zod";
 import { writeAudit } from "../lib/audit";
+import { randomUUID } from "node:crypto";
 
 const router = Router();
 const clean = (value: any) => withoutMongoId(value);
 const serialize = (g: any) => ({
   ...clean(g),
+  currency: g.currency ?? "INR",
   targetAmount: Number(g.targetAmount),
   currentAmount: Number(g.currentAmount),
   recurringContribution:
@@ -30,13 +32,34 @@ const serialize = (g: any) => ({
 const owned = (id: number, profileId: number) => ({ id, profileId });
 
 router.get("/goals", requireAuth, async (req, res) => {
-  const rows = await (
+  const rawGoals: any[] = await (
     await getCollection(collections.goals)
   )
     .find({ profileId: req.user!.userId })
     .sort({ createdAt: 1 })
     .toArray();
-  res.json(rows.map(serialize));
+  const goalIds = rawGoals.map(goal => goal.id);
+  const contributions: any[] = goalIds.length ? await (await getCollection(collections.goalContributions))
+    .find({ profileId: req.user!.userId, goalId: { $in: goalIds }, isReversed: { $ne: true } })
+    .sort({ createdAt: 1 }).toArray() : [];
+  const summaries = new Map<number, { contributed: number; byMonth: Map<string, number>; recent: any[] }>();
+  for (const contribution of contributions) {
+    const summary = summaries.get(contribution.goalId) ?? { contributed: 0, byMonth: new Map<string, number>(), recent: [] };
+    const amount = Number(contribution.amount);
+    const month = new Date(contribution.createdAt).toISOString().slice(0, 7);
+    summary.contributed += amount;
+    summary.byMonth.set(month, (summary.byMonth.get(month) ?? 0) + amount);
+    summary.recent.unshift({ amount, note: contribution.note ?? null, createdAt: contribution.createdAt, transferGroupId: contribution.transferGroupId ?? null });
+    summaries.set(contribution.goalId, summary);
+  }
+  const now = new Date();
+  const months = Array.from({ length: 6 }, (_, index) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5 + index, 1, 12)).toISOString().slice(0, 7));
+  res.json(rawGoals.map(goal => {
+    const summary = summaries.get(goal.id) ?? { contributed: 0, byMonth: new Map<string, number>(), recent: [] };
+    let running = Math.max(0, Number(goal.currentAmount) - summary.contributed);
+    const progressHistory = months.map(month => ({ month, amount: running += summary.byMonth.get(month) ?? 0 }));
+    return { ...serialize(goal), progressHistory, recentContributions: summary.recent.slice(0, 5) };
+  }));
 });
 router.post("/goals", requireAuth, async (req, res) => {
   const p = CreateGoalBody.safeParse(req.body);
@@ -144,38 +167,52 @@ router.post("/goals/:id/contribute", requireAuth, async (req, res) => {
     return;
   }
   const accountId = req.body?.accountId ? Number(req.body.accountId) : null;
+  const destinationAccountId = req.body?.destinationAccountId ? Number(req.body.destinationAccountId) : null;
+  let fundingAccount: any = null;
   if (
     accountId &&
-    !(await (
-      await getCollection(collections.accounts)
-    ).findOne(owned(accountId, profileId)))
+    !(fundingAccount = await (await getCollection(collections.accounts)).findOne(owned(accountId, profileId)))
   ) {
     res.status(404).json({ error: "Account not found" });
     return;
+  }
+  if (destinationAccountId) {
+    const destination: any = await (await getCollection(collections.accounts)).findOne(owned(destinationAccountId, profileId));
+    if (!accountId || !fundingAccount || !destination || destinationAccountId === accountId) {
+      res.status(400).json({ error: "Choose different source and savings accounts." });
+      return;
+    }
+    if ((destination.currency ?? "INR") !== (fundingAccount.currency ?? "INR")) {
+      res.status(400).json({ error: "Savings transfers must use the same currency on both accounts." });
+      return;
+    }
+    if (current.currency && current.currency !== (fundingAccount.currency ?? "INR")) {
+      res.status(400).json({ error: `This goal is tracked in ${current.currency}. Choose accounts in that currency.` });
+      return;
+    }
   }
   const now = new Date(),
     amount = Number(b.data.amount),
     newAmount = Number(current.currentAmount) + amount;
   let transactionId: number | null = null;
+  let transferGroupId: string | null = null;
   if (accountId) {
+    const transactions = await getCollection(collections.transactions);
     transactionId = await nextId(collections.transactions);
-    await (
-      await getCollection(collections.transactions)
-    ).insertOne({
-      id: transactionId,
-      profileId,
-      accountId,
-      type: "expense",
-      direction: "debit",
-      amount,
-      date: now.toISOString().slice(0, 10),
-      description: `Contribution to ${current.name}`,
-      category: "Savings goals",
-      status: "cleared",
-      version: 1,
-      createdAt: now,
-      updatedAt: now,
-    });
+    if (destinationAccountId) {
+      const targetId = await nextId(collections.transactions);
+      transferGroupId = randomUUID();
+      await transactions.insertMany([
+        { id: transactionId, profileId, accountId, type: "transfer", direction: "debit", amount, date: now.toISOString().slice(0, 10), description: `Savings transfer · ${current.name}`, status: "cleared", transferGroupId, version: 1, deletedAt: null, createdAt: now, updatedAt: now },
+        { id: targetId, profileId, accountId: destinationAccountId, type: "transfer", direction: "credit", amount, date: now.toISOString().slice(0, 10), description: `Savings transfer · ${current.name}`, status: "cleared", transferGroupId, version: 1, deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+    } else {
+      await transactions.insertOne({
+        id: transactionId, profileId, accountId, type: "expense", direction: "debit", amount,
+        date: now.toISOString().slice(0, 10), description: `Contribution to ${current.name}`, category: "Savings goals",
+        status: "cleared", version: 1, deletedAt: null, createdAt: now, updatedAt: now,
+      });
+    }
   }
   const contribution: any = {
     id: await nextId(collections.goalContributions),
@@ -183,6 +220,7 @@ router.post("/goals/:id/contribute", requireAuth, async (req, res) => {
     goalId: current.id,
     accountId,
     transactionId,
+    transferGroupId,
     amount,
     note: req.body?.note || null,
     isReversed: false,
@@ -197,6 +235,7 @@ router.post("/goals/:id/contribute", requireAuth, async (req, res) => {
     {
       $set: {
         currentAmount: newAmount,
+        currency: current.currency ?? fundingAccount?.currency ?? "INR",
         isCompleted: newAmount >= Number(current.targetAmount),
         updatedAt: now,
       },
@@ -243,13 +282,11 @@ router.post(
       { id: contributionId },
       { $set: { isReversed: true, updatedAt: new Date() } },
     );
-    if (contribution.transactionId)
-      await (
-        await getCollection(collections.transactions)
-      ).updateOne(owned(contribution.transactionId, profileId), {
-        $set: { status: "void", updatedAt: new Date() },
-        $inc: { version: 1 },
-      });
+    if (contribution.transferGroupId) {
+      await (await getCollection(collections.transactions)).updateMany({ transferGroupId: contribution.transferGroupId, profileId }, { $set: { status: "void", updatedAt: new Date() }, $inc: { version: 1 } });
+    } else if (contribution.transactionId) {
+      await (await getCollection(collections.transactions)).updateOne(owned(contribution.transactionId, profileId), { $set: { status: "void", updatedAt: new Date() }, $inc: { version: 1 } });
+    }
     const amount = Math.max(
       0,
       Number(goal.currentAmount) - Number(contribution.amount),

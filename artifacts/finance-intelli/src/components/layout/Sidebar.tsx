@@ -2,7 +2,7 @@ import { Link, useLocation } from 'wouter';
 import {
   LayoutDashboard, Wallet, PieChart, Target,
   CalendarDays, Bell, LineChart, FileText,
-  Settings, Sparkles, LogOut, Zap, Landmark, Route, HeartPulse, FolderKanban, SlidersHorizontal
+  Settings, Sparkles, LogOut, Zap, Landmark, Route, HeartPulse, FolderKanban, SlidersHorizontal, Heart
 } from 'lucide-react';
 import { useGetMe, useLogout } from '@workspace/api-client-react';
 import { clearToken } from '@/lib/api-client';
@@ -10,32 +10,38 @@ import { useQueryClient } from '@tanstack/react-query';
 
 const sections = [
   {
-    label: 'Overview',
+    label: 'Daily money',
     items: [
-      { href: '/command',      label: 'Command Centre', icon: Zap },
-      { href: '/dashboard',    label: 'Dashboard',    icon: LayoutDashboard },
-      { href: '/accounts',     label: 'Accounts',     icon: Landmark },
+      { href: '/command',      label: 'Today', icon: Zap },
       { href: '/transactions', label: 'Transactions', icon: Wallet },
+      { href: '/accounts',     label: 'Accounts',     icon: Landmark },
       { href: '/budgets',      label: 'Budgets',      icon: PieChart },
+      { href: '/giving',       label: 'Giving',       icon: Heart },
       { href: '/goals',        label: 'Goals',        icon: Target },
     ]
   },
   {
-    label: 'Planning',
+    label: 'Plan ahead',
     items: [
-      { href: '/plan',      label: 'Financial Plan', icon: Route },
-      { href: '/wealth',    label: 'Financial Health', icon: HeartPulse },
-      { href: '/organize',  label: 'Workspace', icon: FolderKanban },
-      { href: '/calendar',  label: 'Calendar',  icon: CalendarDays },
-      { href: '/reminders', label: 'Reminders', icon: Bell },
+      { href: '/plan',      label: 'Forecast & imports', icon: Route },
+      { href: '/reminders', label: 'Bills & reminders', icon: Bell },
+      { href: '/calendar',  label: 'Money calendar',  icon: CalendarDays },
     ]
   },
   {
-    label: 'Intelligence',
+    label: 'Review',
     items: [
+      { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { href: '/wealth',    label: 'Financial health', icon: HeartPulse },
       { href: '/analytics', label: 'Analytics',   icon: LineChart },
       { href: '/reports',   label: 'Reports',     icon: FileText },
       { href: '/insights',  label: 'Smart Insights', icon: Sparkles },
+    ]
+  },
+  {
+    label: 'More tools',
+    items: [
+      { href: '/organize',  label: 'Workspace', icon: FolderKanban },
       { href: '/studio',    label: 'Experience Studio', icon: SlidersHorizontal },
     ]
   },

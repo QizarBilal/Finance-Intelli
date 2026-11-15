@@ -3,6 +3,7 @@ import {
   collections,
   getCollection,
   nextId,
+  withMongoTransaction,
   withoutMongoId,
   withoutMongoIds,
 } from "@workspace/db";
@@ -20,6 +21,7 @@ import { writeAudit } from "../lib/audit";
 
 const router = Router();
 const active = { $in: [null, undefined] };
+
 
 async function upsertTransactionCategory(
   userId: number,
@@ -122,6 +124,56 @@ router.get("/transactions", requireAuth, async (req, res) => {
     transactions.countDocuments(filter),
   ]);
   res.json({ data: withoutMongoIds(rows).map(serializeTransaction), total });
+});
+
+router.patch("/transactions/bulk", requireAuth, async (req, res) => {
+  const ids = Array.isArray(req.body?.ids)
+    ? Array.from(new Set<number>((req.body.ids as unknown[]).map(Number).filter((id): id is number => Number.isInteger(id) && id > 0)))
+    : [];
+  const nextType = ["income", "expense"].includes(req.body?.type) ? req.body.type : null;
+  const categoryProvided = Object.prototype.hasOwnProperty.call(req.body ?? {}, "category");
+  const categoryName = typeof req.body?.category === "string" ? req.body.category.trim().slice(0, 80) : "";
+  if (!ids.length || ids.length > 100 || (!nextType && !categoryProvided) || (categoryProvided && req.body.category !== null && !categoryName)) {
+    res.status(400).json({ error: "Select 1 to 100 transactions and choose a valid type or category update." });
+    return;
+  }
+  const userId = req.user!.userId;
+  const existing: any[] = await (await getCollection(collections.transactions)).find({
+    id: { $in: ids }, profileId: userId, deletedAt: active,
+  }).toArray();
+  if (existing.length !== ids.length) {
+    res.status(404).json({ error: "One or more selected transactions could not be found. Refresh the list and retry." });
+    return;
+  }
+  if (existing.some((row) => row.type === "transfer")) {
+    res.status(400).json({ error: "Transfers cannot be changed with a bulk category action." });
+    return;
+  }
+  const categoryIds = new Map<number, number | null>();
+  if (categoryProvided) {
+    for (const row of existing) {
+      const type = nextType ?? row.type;
+      categoryIds.set(row.id, categoryName ? await upsertTransactionCategory(userId, categoryName, type, false) : null);
+    }
+  }
+  await withMongoTransaction(async (session) => {
+    const txs = await getCollection(collections.transactions);
+    for (const row of existing) {
+      const update: any = { updatedAt: new Date() };
+      if (nextType) { update.type = nextType; update.direction = nextType === "income" ? "credit" : "debit"; }
+      if (categoryProvided) {
+        update.category = categoryName || null;
+        update.categoryId = categoryIds.get(row.id) ?? null;
+      }
+      await txs.updateOne({ id: row.id, profileId: userId, deletedAt: active }, {
+        $set: update, $inc: { version: 1 },
+      }, { session });
+    }
+  });
+  await writeAudit(req, "bulk_update", "transaction", null, null, {
+    ids, type: nextType, category: categoryProvided ? categoryName || null : undefined,
+  });
+  res.json({ updated: existing.length });
 });
 
 router.post("/transactions", requireAuth, async (req, res) => {

@@ -40,6 +40,14 @@ async function spent(
 ) {
   const r = range(b, tz, ws),
     t = await getCollection(collections.transactions),
+    accounts: any[] = await (await getCollection(collections.accounts)).find({ profileId: userId }).toArray(),
+    currencySet = new Set(accounts.map(account => account.currency ?? "INR")),
+    currency = b.currency ?? (currencySet.size === 1 ? [...currencySet][0] as string : null),
+    accountsByCurrency = new Map<string, number[]>(accounts.reduce((map, account) => {
+      const key = account.currency ?? "INR";
+      map.set(key, [...(map.get(key) ?? []), account.id]);
+      return map;
+    }, new Map<string, number[]>())),
     f: any = {
       profileId: userId,
       type: "expense",
@@ -47,6 +55,8 @@ async function spent(
       deletedAt: active,
       status: { $ne: "void" },
     };
+  const selectedAccounts = currency ? accountsByCurrency.get(currency) ?? [] : accounts.map(account => account.id);
+  f.accountId = { $in: selectedAccounts };
   if (b.category)
     f.category = {
       $regex: `^${String(b.category)
@@ -54,20 +64,25 @@ async function spent(
         .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`,
       $options: "i",
     };
-  const x = await t
-    .aggregate<any>([
+  const x = await t.aggregate<any>([
       { $match: f },
-      { $group: { _id: null, total: { $sum: "$amount" } } },
+      { $group: { _id: currency ? null : "$accountId", total: { $sum: "$amount" } } },
     ])
     .toArray();
-  return Number(x[0]?.total ?? 0);
+  if (currency) return { currency, spent: Number(x[0]?.total ?? 0), spentByCurrency: [{ currency, amount: Number(x[0]?.total ?? 0) }] };
+  const names = new Map(accounts.map(account => [account.id, account.currency ?? "INR"]));
+  const byCurrency = new Map<string, number>();
+  for (const item of x) { const key = names.get(item._id) ?? "INR"; byCurrency.set(key, (byCurrency.get(key) ?? 0) + Number(item.total)); }
+  return { currency: null, spent: null, spentByCurrency: [...byCurrency].map(([code, amount]) => ({ currency: code, amount })) };
 }
-const ser = (b: any, s: number) => ({
+const ser = (b: any, s: { currency: string | null; spent: number | null; spentByCurrency: Array<{ currency: string; amount: number }> }) => ({
   ...b,
   _id: undefined,
   amount: Number(b.limitAmount ?? b.amount ?? 0),
   limitAmount: Number(b.limitAmount ?? b.amount ?? 0),
-  spent: s,
+  currency: s.currency,
+  spent: s.spent,
+  spentByCurrency: s.spentByCurrency,
   alertThreshold: b.alertThreshold == null ? null : Number(b.alertThreshold),
   createdAt: new Date(b.createdAt).toISOString(),
 });
@@ -120,6 +135,7 @@ router.post("/budgets", requireAuth, async (req, res) => {
       amount: Number(p.data.amount),
       limitAmount: Number(p.data.amount),
       category: p.data.category ?? null,
+      currency: p.data.currency?.trim().toUpperCase() ?? null,
       color: p.data.color ?? null,
       startDate: p.data.startDate ?? null,
       endDate: p.data.endDate ?? null,
@@ -162,11 +178,12 @@ router.patch("/budgets/:id", requireAuth, async (req, res) => {
     "name",
     "period",
     "category",
+    "currency",
     "color",
     "startDate",
     "endDate",
   ] as const)
-    if (p.data[k] != null) u[k] = p.data[k];
+    if (p.data[k] != null) u[k] = k === "currency" ? p.data[k].trim().toUpperCase() : p.data[k];
   if (p.data.amount != null) {
     u.amount = Number(p.data.amount);
     u.limitAmount = Number(p.data.amount);

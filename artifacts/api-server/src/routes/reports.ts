@@ -35,19 +35,28 @@ async function data(req: Request) {
   return { txs, accounts, names };
 }
 router.get("/reports/summary", requireAuth, async (req, res) => {
-  const { txs, accounts } = await data(req),
-    income = txs
-      .filter((t) => t.type === "income")
-      .reduce((s, t) => s + Number(t.amount), 0),
-    expense = txs
-      .filter((t) => t.type === "expense")
-      .reduce((s, t) => s + Number(t.amount), 0),
-    cats = new Map<string, number>();
-  for (const t of txs.filter((t) => t.type === "expense"))
-    cats.set(
-      t.category || "Uncategorized",
-      (cats.get(t.category || "Uncategorized") || 0) + Number(t.amount),
-    );
+  const { txs, accounts } = await data(req);
+  const accountCurrencies = new Map(accounts.map((account) => [account.id, account.currency ?? "INR"]));
+  const byCurrency = new Map<string, { currency: string; income: number; expense: number; taxDeductible: number; transactionCount: number; categories: Map<string, number> }>();
+  for (const tx of txs) {
+    const currency = accountCurrencies.get(tx.accountId) ?? "INR";
+    const group = byCurrency.get(currency) ?? { currency, income: 0, expense: 0, taxDeductible: 0, transactionCount: 0, categories: new Map<string, number>() };
+    group.transactionCount++;
+    if (tx.type === "income") group.income += Number(tx.amount);
+    if (tx.type === "expense") {
+      group.expense += Number(tx.amount);
+      const category = tx.category || "Uncategorized";
+      group.categories.set(category, (group.categories.get(category) ?? 0) + Number(tx.amount));
+    }
+    if (tx.taxDeductible) group.taxDeductible += Number(tx.amount);
+    byCurrency.set(currency, group);
+  }
+  const groups = [...byCurrency.values()].map(({ categories, ...group }) => ({
+    ...group,
+    savings: group.income - group.expense,
+    categories: [...categories].map(([category, amount]) => ({ category, amount })).sort((a, b) => b.amount - a.amount),
+  }));
+  const hasMixedCurrencies = groups.length > 1;
   const all: any[] = await (
       await getCollection(collections.transactions)
     )
@@ -62,6 +71,7 @@ router.get("/reports/summary", requireAuth, async (req, res) => {
       .map((a) => ({
         id: a.id,
         name: a.name,
+        currency: a.currency ?? "INR",
         balance:
           Number(a.openingBalance || 0) +
           all
@@ -72,19 +82,22 @@ router.get("/reports/summary", requireAuth, async (req, res) => {
               0,
             ),
       }));
+  const balanceCurrencies = Object.entries(balances.reduce<Record<string, number>>((totals, account) => {
+    totals[account.currency] = (totals[account.currency] ?? 0) + account.balance;
+    return totals;
+  }, {})).map(([currency, balance]) => ({ currency, balance }));
   res.json({
-    income,
-    expense,
-    savings: income - expense,
+    income: hasMixedCurrencies ? null : groups[0]?.income ?? 0,
+    expense: hasMixedCurrencies ? null : groups[0]?.expense ?? 0,
+    savings: hasMixedCurrencies ? null : groups[0]?.savings ?? 0,
+    hasMixedCurrencies,
+    currencyBreakdown: groups,
     transactionCount: txs.length,
-    taxDeductible: txs
-      .filter((t) => t.taxDeductible)
-      .reduce((s, t) => s + Number(t.amount), 0),
-    categories: [...cats]
-      .map(([category, amount]) => ({ category, amount }))
-      .sort((a, b) => b.amount - a.amount),
+    taxDeductible: hasMixedCurrencies ? null : groups[0]?.taxDeductible ?? 0,
+    categories: hasMixedCurrencies ? [] : groups[0]?.categories ?? [],
     accounts: balances,
-    netWorth: balances.reduce((s, a) => s + a.balance, 0),
+    currencyBalances: balanceCurrencies,
+    netWorth: balanceCurrencies.length > 1 ? null : balances.reduce((s, a) => s + a.balance, 0),
   });
 });
 router.get("/reports/export.csv", requireAuth, async (req, res) => {

@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Input } from '@/components/ui/input';
 
 const destinations = [
-  ['/command', 'Financial command centre'], ['/transactions', 'Transactions'], ['/accounts', 'Accounts'], ['/budgets', 'Budgets'], ['/goals', 'Goals'],
+  ['/command', 'Financial command centre'], ['/transactions', 'Transactions'], ['/accounts', 'Accounts'], ['/budgets', 'Budgets'], ['/giving', 'Giving and donations'], ['/goals', 'Goals'],
   ['/wealth', 'Net worth, credit and investments'], ['/organize', 'Tax, receipts and household'], ['/studio', 'Dashboard and notifications'], ['/reports', 'Reports'], ['/settings', 'Settings'],
 ];
 export default function GlobalCommand() {

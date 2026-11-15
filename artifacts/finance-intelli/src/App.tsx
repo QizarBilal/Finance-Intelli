@@ -12,6 +12,7 @@ const Signup = lazy(() => import('@/pages/signup'));
 const Login = lazy(() => import('@/pages/login'));
 const Transactions = lazy(() => import('@/pages/transactions'));
 const Budgets = lazy(() => import('@/pages/budgets'));
+const Giving = lazy(() => import('@/pages/giving'));
 const Goals = lazy(() => import('@/pages/goals'));
 const Calendar = lazy(() => import('@/pages/calendar'));
 const Reminders = lazy(() => import('@/pages/reminders'));
@@ -89,6 +90,7 @@ function MainApp() {
         <Route path="/accounts" component={Accounts} />
         <Route path="/plan" component={Plan} />
         <Route path="/budgets" component={Budgets} />
+        <Route path="/giving" component={Giving} />
         <Route path="/goals" component={Goals} />
         <Route path="/calendar" component={Calendar} />
         <Route path="/reminders" component={Reminders} />
